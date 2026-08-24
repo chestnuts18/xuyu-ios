@@ -6,6 +6,11 @@ import AVFoundation
 final class WebModel: ObservableObject {
     @Published var failed = false
     weak var webView: WKWebView?
+    // 重载冷却（2026-08-25 频闪修复）：WebKit 在 provisional 导航失败后
+    // 自带 reload-frame 恢复，delegate 再无条件 load/reload 会形成无限重载
+    // 循环（Apple 论坛确认的经典模式）——两次恢复/重载之间至少间隔数秒。
+    var lastRecoverAt: Date = .distantPast
+    var lastReloadAt: Date = .distantPast
 
     func retry() {
         failed = false
@@ -50,7 +55,12 @@ struct AionWebView: UIViewRepresentable {
         // 流量下切到 TS/CF 后页面仍打旧 LAN → 全失败空白（2026-08-25 实测根因）。
         // ⚠️ 不在这里 pushCache：evaluateJavaScript 与 reload 并发会撞 WebKit 竞态
         //（空白+闪退的另一半根因），reload 后新文档自会从注入脚本拿到新基址。
+        // ⚠️ reload 冷却 5s：探测在 CF/LAN 之间抖动时 adopt 反复切换，
+        // 无条件 reload 与 WebKit 自带恢复机制形成重载循环 = 频闪。
         APIClient.shared.onBaseURLChanged = { [weak webView] _ in
+            let now = Date()
+            guard now.timeIntervalSince(model.lastReloadAt) >= 5 else { return }
+            model.lastReloadAt = now
             guard let controller = webView?.configuration.userContentController else { return }
             controller.removeAllUserScripts()
             controller.addUserScript(WKUserScript(
@@ -116,9 +126,14 @@ struct AionWebView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             guard (error as NSError).code != NSURLErrorCancelled else { return }
             AionLogger.shared.log("webview didFailProvisional url=\(webView.url?.absoluteString ?? "nil") err=\((error as NSError).code)")
+            // 冷却 10s：WebKit 对 provisional 失败自带 reload-frame 恢复，
+            // 无条件 load 会与之形成重载循环（2026-08-25 频闪根因二）
+            let now = Date()
+            guard now.timeIntervalSince(self.parent.model.lastRecoverAt) >= 10 else { return }
+            self.parent.model.lastRecoverAt = now
             Task { @MainActor in
                 // 基址挂了：跳过当前候选，探测下一个（家里 LAN → 出门 TS 自动切换）。
-                // ⚠️ 主文档永远回本地 aionres 页（2026-08-25 频闪根因：失败后
+                // ⚠️ 主文档永远回本地 aionres 页（2026-08-25 频闪根因一：失败后
                 // load 远程候选 URL，页面在本地/远程之间反复横跳；基址切换
                 // 由 adopt → onBaseURLChanged → 重注册脚本 + 本地 reload 完成）
                 if await APIClient.shared.retryAfterFailure() != nil {
