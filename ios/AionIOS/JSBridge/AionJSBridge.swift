@@ -210,7 +210,8 @@ final class AionJSBridge {
     private func dispatch(_ req: BridgeRequest) async -> Any? {
         switch req.bridge {
         case "diag":
-            if req.action == "jserror", let a = req.args {
+            if req.action == "jserror" {
+                let a = req.args
                 let msg = a["msg"] as? String ?? ""
                 let src = a["src"] as? String ?? ""
                 AionLogger.shared.log("js error: \(msg) at \(src)")
