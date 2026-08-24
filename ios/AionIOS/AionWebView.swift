@@ -45,9 +45,11 @@ struct AionWebView: UIViewRepresentable {
         webView.allowsBackForwardNavigationGestures = true
         model.webView = webView
         AionJSBridge.shared.webView = webView
-        // 候选切换后：推送新 apiBase 到所有 frame（页面 WS/fetch 自动跟住新基址）
+        // 候选切换后：推送新 apiBase + 重载本地页面（启动初期旧基址请求全失败——
+        // 重载让 JS 从一开始就用新基址，本地页面重载瞬间完成；同候选重复采纳不触发）
         APIClient.shared.onBaseURLChanged = { [weak webView] _ in
             AionJSBridge.shared.pushCache()
+            webView?.reload()
         }
         // 页面走本地 aionres（秒开）；API/WS 仍走 APIClient 探测的网络基址
         webView.load(URLRequest(url: URL(string: "\(AionSchemeHandler.scheme)://\(AionSchemeHandler.host)/chat")!))
