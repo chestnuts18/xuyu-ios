@@ -64,6 +64,12 @@ final class APIClient: ObservableObject {
             baseURL = Self.candidates[0].url
         }
         Self.sharedBaseURL = baseURL
+        // cached 恢复时找回候选 token：冷启动 cached=CF 时不再走 adopt 全路径，
+        // token 不能丢（2026-08-25 白屏根因之一：sharedToken=nil → 兜底请求 403）
+        if let cand = Self.candidates.first(where: { $0.url == baseURL }) {
+            currentToken = cand.token
+            Self.sharedToken = cand.token
+        }
         // 网络路径变化（切 WiFi/开关 VPN）→ 重探，自动跟住
         monitor.pathUpdateHandler = { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -73,8 +79,14 @@ final class APIClient: ObservableObject {
         monitor.start(queue: monitorQueue)
     }
 
-    /// App 启动时调用：探测并采纳第一个可达的候选
-    func start() { probeIfNeeded(bypassVerifyWindow: false) }
+    /// App 启动时调用：探测并采纳第一个可达的候选；
+    /// 同时给当前候选种好隧道 Cookie（冷启动 cached=CF 时页面首请求就有凭据）
+    func start() {
+        if let cand = Self.candidates.first(where: { $0.url == baseURL }) {
+            installTunnelCookie(cand) {}
+        }
+        probeIfNeeded(bypassVerifyWindow: false)
+    }
 
     /// 任一请求成功后调用：固化当前基址、刷新验证时钟
     func markVerified() { lastVerifiedAt = Date() }
@@ -161,17 +173,18 @@ final class APIClient: ObservableObject {
 
     private func adopt(_ candidate: Candidate) {
         AionLogger.shared.log("apiclient adopt base=\(candidate.url.absoluteString) (prev=\(baseURL.absoluteString))")
+        currentToken = candidate.token
+        Self.sharedToken = candidate.token
+        lastVerifiedAt = Date()
         if candidate.url == baseURL {
-            lastVerifiedAt = Date()
-            currentToken = candidate.token
+            // 同候选：不 reload，但 Cookie 可能已过期/未种（冷启动 cached=CF）——
+            // 补种一次（2026-08-25 白屏根因之二）
+            installTunnelCookie(candidate) {}
             return
         }
         baseURL = candidate.url
-        currentToken = candidate.token
         Self.sharedBaseURL = candidate.url
-        Self.sharedToken = candidate.token
         UserDefaults.standard.set(candidate.url.absoluteString, forKey: Self.cacheKey)
-        lastVerifiedAt = Date()
         // 隧道候选：先给 WebView 种下 AionToken Cookie 再 reload——
         // WKWebView 主 frame 加不了自定义 header，Cookie 是唯一干净路径，
         // 顺序反了会 401（鉴权竞态）。

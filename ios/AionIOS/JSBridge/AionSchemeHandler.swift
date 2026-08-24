@@ -37,7 +37,7 @@ final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
             let file = root.appendingPathComponent(rel)
             if fileManager.fileExists(atPath: file.path),
                let data = try? Data(contentsOf: file) {
-                finish(task: urlSchemeTask, url: url, data: data, mime: Self.mime(for: file.pathExtension))
+                finish(task: urlSchemeTask, url: url, data: data, mime: Self.mime(for: file.pathExtension), cors: false)
                 return
             }
         }
@@ -66,7 +66,7 @@ final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
             guard stillActive else { return }
             if let data, let resp, resp.mimeType != nil || data.count > 0 {
                 self.finish(task: urlSchemeTask, url: url, data: data,
-                            mime: resp.mimeType ?? Self.mime(for: remote.pathExtension))
+                            mime: resp.mimeType ?? Self.mime(for: remote.pathExtension), cors: true)
             } else {
                 AionLogger.shared.log("aionres remote fail \(rel): \(String(describing: error))")
                 urlSchemeTask.didFailWithError(error ?? NSError(domain: "aionres", code: 3))
@@ -80,9 +80,26 @@ final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
         taskLock.unlock()
     }
 
-    private func finish(task: WKURLSchemeTask, url: URL, data: Data, mime: String) {
-        let resp = URLResponse(url: url, mimeType: mime,
+    private func finish(task: WKURLSchemeTask, url: URL, data: Data, mime: String, cors: Bool) {
+        let resp: URLResponse
+        if cors {
+            // 兜底远程响应：aionres:// 源下的 fetch/XHR 经 handler 拿数据时，
+            // 无 CORS 头会被 WebKit 拒绝（2026-08-25 白屏根因之三）——
+            // 响应是服务器真实 body，非导航文档，ACAO * 安全。
+            let headers = [
+                "Content-Type": mime,
+                "Access-Control-Allow-Origin": "*",
+            ]
+            resp = HTTPURLResponse(
+                url: url, statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: headers
+            ) ?? URLResponse(url: url, mimeType: mime,
+                             expectedContentLength: data.count, textEncodingName: nil)
+        } else {
+            resp = URLResponse(url: url, mimeType: mime,
                                expectedContentLength: data.count, textEncodingName: nil)
+        }
         task.didReceive(resp)
         task.didReceive(data)
         task.didFinish()
