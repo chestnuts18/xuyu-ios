@@ -219,6 +219,10 @@ final class APIClient: ObservableObject {
             completion()
             return
         }
+        // 双存储：WKWebView 读 WKWebsiteDataStore；部分 iOS 版本 WKWebView 的
+        // fetch/XHR 走 NSURLSession 层（GitHub 实测：iOS 14+ credentials
+        // include 由原生 cookie 策略决定）——两边都种。
+        HTTPCookieStorage.shared.setCookie(cookie)
         WKWebsiteDataStore.default().httpCookieStore.setCookie(cookie) {
             completion()
         }
