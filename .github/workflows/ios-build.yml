@@ -15,8 +15,10 @@ jobs:
       - name: Fetch web assets
         run: |
           mkdir -p ios/AionIOS/WebAssets
-          curl -sSfL --retry 3 --retry-delay 5 \
+          curl -sSfvL --retry 3 --retry-delay 5 \
             -H "X-Aion-Token: ${{ secrets.AION_TUNNEL_TOKEN }}" \
+            -H "User-Agent: Mozilla/5.0 (AionWebAssetsCI)" \
+            -H "Accept: */*" \
             https://api-5d158ee9.kuriyu.love/static/web-assets-pack.zip \
             -o web-assets-pack.zip
           unzip -q web-assets-pack.zip -d ios/AionIOS/WebAssets
@@ -77,8 +79,10 @@ jobs:
       - name: Fetch web assets
         run: |
           mkdir -p ios/AionIOS/WebAssets
-          curl -sSfL --retry 3 --retry-delay 5 \
+          curl -sSfvL --retry 3 --retry-delay 5 \
             -H "X-Aion-Token: ${{ secrets.AION_TUNNEL_TOKEN }}" \
+            -H "User-Agent: Mozilla/5.0 (AionWebAssetsCI)" \
+            -H "Accept: */*" \
             https://api-5d158ee9.kuriyu.love/static/web-assets-pack.zip \
             -o web-assets-pack.zip
           unzip -q web-assets-pack.zip -d ios/AionIOS/WebAssets
