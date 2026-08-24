@@ -75,9 +75,14 @@ final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
+        let id = ObjectIdentifier(urlSchemeTask)
         taskLock.lock()
-        activeTasks.remove(ObjectIdentifier(urlSchemeTask))
+        let wasActive = activeTasks.remove(id) != nil
         taskLock.unlock()
+        // 只记「进行中被打断」的：验证 WebKit 是否在兜底响应前就 stop 任务
+        if wasActive {
+            AionLogger.shared.log("aionres task stopped early path=\(urlSchemeTask.request.url?.path ?? "?")")
+        }
     }
 
     private func finish(task: WKURLSchemeTask, url: URL, data: Data, mime: String, cors: Bool) {

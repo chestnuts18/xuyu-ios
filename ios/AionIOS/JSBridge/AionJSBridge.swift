@@ -64,6 +64,26 @@ final class AionJSBridge {
         } catch(_) {}
       });
 
+      // 注入自报（2026-08-25 白屏排查）：证明注入脚本执行了 + 基址实际值
+      try {
+        window.webkit.messageHandlers.aionBridge.postMessage({
+          bridge:'diag', action:'injected',
+          args:{base: String(window.AION_API_BASE || '').slice(0,120)}
+        });
+      } catch(e2) {}
+
+      // XHR 相对路径补基址（fetch 拦截器只拦 fetch；页面部分请求走 XHR，
+      // 相对 /api/ 在 aionres:// 源下会被路由进 scheme handler = 白屏根因之一）
+      try {
+        var _xhrOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url) {
+          if (typeof url === 'string' && url.indexOf('/api/') === 0) {
+            url = (window.AION_API_BASE || '') + url;
+          }
+          return _xhrOpen.call(this, method, url, arguments[2], arguments[3], arguments[4]);
+        };
+      } catch(e3) {}
+
       root.__aionBridgeDispatch = function(name, payload) {
         try {
           if (name === 'cache') {
@@ -215,6 +235,9 @@ final class AionJSBridge {
                 let msg = a["msg"] as? String ?? ""
                 let src = a["src"] as? String ?? ""
                 AionLogger.shared.log("js error: \(msg) at \(src)")
+            } else if req.action == "injected" {
+                let base = req.args["base"] as? String ?? ""
+                AionLogger.shared.log("inject ok base=\(base)")
             }
             return nil
 
