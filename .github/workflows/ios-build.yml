@@ -11,15 +11,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 网页资源不进公开仓库：构建时从服务器经 CF 隧道拉取（token 走 Secrets）
+      # 网页资源不进公开仓库：从私有 aion-web-assets 拉取（细粒度只读 token 走 Secrets）
       - name: Fetch web assets
         run: |
           mkdir -p ios/AionIOS/WebAssets
-          curl -sSfvL --retry 3 --retry-delay 5 \
-            -H "X-Aion-Token: ${{ secrets.AION_TUNNEL_TOKEN }}" \
-            -H "User-Agent: Mozilla/5.0 (AionWebAssetsCI)" \
-            -H "Accept: */*" \
-            https://api-5d158ee9.kuriyu.love/static/web-assets-pack.zip \
+          curl -sSfL --retry 3 --retry-delay 5 \
+            -H "Authorization: token ${{ secrets.AION_ASSETS_PAT }}" \
+            -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/chestnuts18/aion-web-assets/contents/web-assets-pack.zip?ref=main" \
             -o web-assets-pack.zip
           unzip -q web-assets-pack.zip -d ios/AionIOS/WebAssets
           ls ios/AionIOS/WebAssets | head -5
@@ -75,15 +74,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 网页资源不进公开仓库：构建时从服务器经 CF 隧道拉取（token 走 Secrets）
+      # 网页资源不进公开仓库：从私有 aion-web-assets 拉取（细粒度只读 token 走 Secrets）
       - name: Fetch web assets
         run: |
           mkdir -p ios/AionIOS/WebAssets
-          curl -sSfvL --retry 3 --retry-delay 5 \
-            -H "X-Aion-Token: ${{ secrets.AION_TUNNEL_TOKEN }}" \
-            -H "User-Agent: Mozilla/5.0 (AionWebAssetsCI)" \
-            -H "Accept: */*" \
-            https://api-5d158ee9.kuriyu.love/static/web-assets-pack.zip \
+          curl -sSfL --retry 3 --retry-delay 5 \
+            -H "Authorization: token ${{ secrets.AION_ASSETS_PAT }}" \
+            -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/chestnuts18/aion-web-assets/contents/web-assets-pack.zip?ref=main" \
             -o web-assets-pack.zip
           unzip -q web-assets-pack.zip -d ios/AionIOS/WebAssets
           ls ios/AionIOS/WebAssets | head -5
