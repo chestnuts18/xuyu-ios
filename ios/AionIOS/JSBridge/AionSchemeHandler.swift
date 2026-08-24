@@ -1,0 +1,86 @@
+import Foundation
+import WebKit
+
+/// aionres:// 本地资源 handler（2026-08-25 网页资源打包）
+/// URL 形如 aionres://aion/<path>：WebAssets bundle 优先；未命中时远程兜底（带隧道 token 可过 CF WAF）。
+/// 裸页面路径 /health → WebAssets/static/health.html（对齐 FastAPI FileResponse 映射）。
+final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
+    static let scheme = "aionres"
+    static let host = "aion"
+
+    private let fileManager = FileManager.default
+
+    private var assetsRoot: URL? {
+        Bundle.main.resourceURL?.appendingPathComponent("WebAssets")
+    }
+
+    func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
+        guard let url = urlSchemeTask.request.url else {
+            urlSchemeTask.didFailWithError(NSError(domain: "aionres", code: 1))
+            return
+        }
+        let path = url.path
+        var rel = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        if rel.isEmpty {
+            rel = "static/chat.html"  // 首页
+        } else if !rel.contains(".") {
+            rel = "static/" + rel + ".html"  // 裸页面路径
+        }
+
+        if let root = assetsRoot {
+            let file = root.appendingPathComponent(rel)
+            if fileManager.fileExists(atPath: file.path),
+               let data = try? Data(contentsOf: file) {
+                finish(task: urlSchemeTask, url: url, data: data, mime: Self.mime(for: file.pathExtension))
+                return
+            }
+        }
+
+        // 兜底：远程代理（带隧道 token 头，CF WAF 无凭证 403 也能过）
+        guard let remote = URL(string: url.path, relativeTo: APIClient.sharedBaseURL) else {
+            urlSchemeTask.didFailWithError(NSError(domain: "aionres", code: 2))
+            return
+        }
+        var req = URLRequest(url: remote)
+        req.timeoutInterval = 15
+        if let t = APIClient.sharedToken {
+            req.setValue(t, forHTTPHeaderField: "X-Aion-Token")
+        }
+        URLSession.shared.dataTask(with: req) { data, resp, error in
+            if let data, let resp, resp.mimeType != nil || data.count > 0 {
+                self.finish(task: urlSchemeTask, url: url, data: data,
+                            mime: resp.mimeType ?? Self.mime(for: remote.pathExtension))
+            } else {
+                urlSchemeTask.didFailWithError(error ?? NSError(domain: "aionres", code: 3))
+            }
+        }.resume()
+    }
+
+    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {}
+
+    private func finish(task: WKURLSchemeTask, url: URL, data: Data, mime: String) {
+        let resp = URLResponse(url: url, mimeType: mime,
+                               expectedContentLength: data.count, textEncodingName: nil)
+        task.didReceive(resp)
+        task.didReceive(data)
+        task.didFinish()
+    }
+
+    static func mime(for ext: String) -> String {
+        switch ext.lowercased() {
+        case "html", "htm": return "text/html"
+        case "js": return "text/javascript"
+        case "css": return "text/css"
+        case "json": return "application/json"
+        case "png": return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif": return "image/gif"
+        case "webp": return "image/webp"
+        case "svg": return "image/svg+xml"
+        case "mp3": return "audio/mpeg"
+        case "ico": return "image/x-icon"
+        case "wav": return "audio/wav"
+        default: return "application/octet-stream"
+        }
+    }
+}

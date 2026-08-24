@@ -10,3 +10,7 @@ portal_full.rb
 *.p8
 *.mobileprovision
 *.b64
+
+# 网页资源打包产物（Aion 前端源码，不公开）：CI 构建时从服务器拉取
+ios/AionIOS/WebAssets/
+pack_web_assets.py

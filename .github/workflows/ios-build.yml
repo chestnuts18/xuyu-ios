@@ -11,6 +11,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 网页资源不进公开仓库：构建时从服务器经 CF 隧道拉取（token 走 Secrets）
+      - name: Fetch web assets
+        run: |
+          mkdir -p ios/AionIOS/WebAssets
+          curl -sSfL --retry 3 --retry-delay 5 \
+            -H "X-Aion-Token: ${{ secrets.AION_TUNNEL_TOKEN }}" \
+            https://api-5d158ee9.kuriyu.love/static/web-assets-pack.zip \
+            -o web-assets-pack.zip
+          unzip -q web-assets-pack.zip -d ios/AionIOS/WebAssets
+          ls ios/AionIOS/WebAssets | head -5
+
       - name: Inspect DeviceActivity SDK interface (verify init API)
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -61,6 +72,17 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
+      # 网页资源不进公开仓库：构建时从服务器经 CF 隧道拉取（token 走 Secrets）
+      - name: Fetch web assets
+        run: |
+          mkdir -p ios/AionIOS/WebAssets
+          curl -sSfL --retry 3 --retry-delay 5 \
+            -H "X-Aion-Token: ${{ secrets.AION_TUNNEL_TOKEN }}" \
+            https://api-5d158ee9.kuriyu.love/static/web-assets-pack.zip \
+            -o web-assets-pack.zip
+          unzip -q web-assets-pack.zip -d ios/AionIOS/WebAssets
+          ls ios/AionIOS/WebAssets | head -5
 
       - name: Install XcodeGen
         run: brew install xcodegen

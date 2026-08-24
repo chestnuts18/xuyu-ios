@@ -8,6 +8,11 @@ import WebKit
 final class APIClient: ObservableObject {
     static let shared = APIClient()
 
+    /// 非隔离镜像（2026-08-25）：AionSchemeHandler 在 WebKit 任意线程读基址/token，
+    /// @MainActor 隔离成员不可访问；adopt/init 时同步更新。
+    nonisolated(unsafe) static var sharedBaseURL: URL = URL(string: "http://192.168.3.218:8080")!
+    nonisolated(unsafe) static var sharedToken: String?
+
     struct Candidate {
         let url: URL
         var token: String?  // 走外网时需要 X-Aion-Token（CF Tunnel 槽位用）
@@ -58,6 +63,7 @@ final class APIClient: ObservableObject {
         } else {
             baseURL = Self.candidates[0].url
         }
+        Self.sharedBaseURL = baseURL
         // 网络路径变化（切 WiFi/开关 VPN）→ 重探，自动跟住
         monitor.pathUpdateHandler = { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -142,6 +148,8 @@ final class APIClient: ObservableObject {
         }
         baseURL = candidate.url
         currentToken = candidate.token
+        Self.sharedBaseURL = candidate.url
+        Self.sharedToken = candidate.token
         UserDefaults.standard.set(candidate.url.absoluteString, forKey: Self.cacheKey)
         lastVerifiedAt = Date()
         // 隧道候选：先给 WebView 种下 AionToken Cookie 再 reload——

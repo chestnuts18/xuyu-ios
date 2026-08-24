@@ -22,14 +22,18 @@ struct AionWebView: UIViewRepresentable {
         try? AVAudioSession.sharedInstance().setActive(true)
 
         let config = WKWebViewConfiguration()
+        // 本地资源 scheme（2026-08-25 网页资源打包）：aionres://aion/<path> → WebAssets bundle
+        config.setURLSchemeHandler(AionSchemeHandler(), forURLScheme: AionSchemeHandler.scheme)
         // 解锁语音/视频：内联播放 + 不要求用户手势 + 画中画
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsPictureInPictureMediaPlayback = true
         // JS 桥：全 frame 注入（健康/定位/监管是聊天页 iframe 子页，也要桥）
+        // {{API_BASE}} 占位替换为当前基址（探测切换后经 cache 推送更新）
         config.userContentController.addUserScript(
             WKUserScript(
-                source: AionJSBridge.injectScript,
+                source: AionJSBridge.injectScript.replacingOccurrences(
+                    of: "{{API_BASE}}", with: APIClient.shared.baseURL.absoluteString),
                 injectionTime: .atDocumentStart,
                 forMainFrameOnly: false
             )
@@ -41,8 +45,12 @@ struct AionWebView: UIViewRepresentable {
         webView.allowsBackForwardNavigationGestures = true
         model.webView = webView
         AionJSBridge.shared.webView = webView
-        // 基址由 APIClient 探测（家里局域网优先，出门 Tailscale）
-        webView.load(URLRequest(url: APIClient.shared.baseURL))
+        // 候选切换后：推送新 apiBase 到所有 frame（页面 WS/fetch 自动跟住新基址）
+        APIClient.shared.onBaseURLChanged = { [weak webView] _ in
+            AionJSBridge.shared.pushCache()
+        }
+        // 页面走本地 aionres（秒开）；API/WS 仍走 APIClient 探测的网络基址
+        webView.load(URLRequest(url: URL(string: "\(AionSchemeHandler.scheme)://\(AionSchemeHandler.host)/chat")!))
         return webView
     }
 

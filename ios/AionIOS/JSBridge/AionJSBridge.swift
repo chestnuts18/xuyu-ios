@@ -20,6 +20,9 @@ final class AionJSBridge {
 
     static let injectScript = """
     (function(){
+      // API 基址（2026-08-25 网页资源打包）：本地 aionres 页面无 location.host，
+      // 所有 WS/fetch 绝对化都靠它；原生探测切换候选后经 cache 推送全 frame 更新。
+      window.AION_API_BASE = window.AION_API_BASE || '{{API_BASE}}';
       // Aion 页面全同源：桥状态统一挂 top window，跨 frame 共享 pending/缓存/事件。
       // 健康/监管页从聊天 sidebar 打开时是 iframe 子页——若不共享，子页的 promise
       // 永远等不到原生回执（evaluateJavaScript 只打到 main frame）。
@@ -54,6 +57,12 @@ final class AionJSBridge {
         try {
           if (name === 'cache') {
             Object.assign(root.__aionSyncCache, payload || {});
+            if (payload && payload.apiBase) {
+              root.AION_API_BASE = payload.apiBase;
+              for (var fi = 0; fi < root.frames.length; fi++) {
+                try { root.frames[fi].AION_API_BASE = payload.apiBase; } catch(e) {}
+              }
+            }
           }
           var evtName = (name === 'cache') ? 'aion-cache-updated' : 'aion-event-' + name;
           root.dispatchEvent(new CustomEvent(evtName, {detail: payload}));
@@ -258,6 +267,7 @@ final class AionJSBridge {
     func pushCache() {
         guard let webView else { return }
         let cache: [String: Any] = [
+            "apiBase": APIClient.shared.baseURL.absoluteString,
             "deviceId": DeviceIdentity.deviceId,
             "healthAuthorized": AionHealthKit.shared.authorized,
             "healthUploadInfo": AionHealthKit.shared.lastUploadInfo,
