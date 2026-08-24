@@ -77,9 +77,20 @@ struct AionWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             AionLogger.shared.log("webview didFinish url=\(webView.url?.absoluteString ?? "nil")")
-            webView.evaluateJavaScript("document.title") { result, _ in
-                if let t = result as? String {
-                    AionLogger.shared.log("page title=\(t)")
+            // 白屏排查：原生直接读页面运行时状态（不依赖注入脚本自报）
+            webView.evaluateJavaScript("""
+            (function(){
+              return {
+                base: (window.AION_API_BASE !== undefined) ? String(window.AION_API_BASE).slice(0,100) : 'UNDEFINED',
+                hasBridge: typeof window.__aionBridgeDispatch === 'function',
+                hasAionBle: typeof window.AionBle === 'object'
+              };
+            })()
+            """) { result, _ in
+                if let d = result as? [String: Any] {
+                    AionLogger.shared.log("page state: base=\(d["base"] ?? "?") bridge=\(d["hasBridge"] ?? "?") ble=\(d["hasAionBle"] ?? "?")")
+                } else {
+                    AionLogger.shared.log("page state read failed: \(String(describing: result))")
                 }
             }
             Task { @MainActor in
