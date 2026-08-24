@@ -47,6 +47,7 @@ final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
             urlSchemeTask.didFailWithError(NSError(domain: "aionres", code: 2))
             return
         }
+        AionLogger.shared.log("aionres miss \(rel) -> \(remote.absoluteString)")
         var req = URLRequest(url: remote)
         req.timeoutInterval = 15
         if let t = APIClient.sharedToken {
@@ -67,6 +68,7 @@ final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
                 self.finish(task: urlSchemeTask, url: url, data: data,
                             mime: resp.mimeType ?? Self.mime(for: remote.pathExtension))
             } else {
+                AionLogger.shared.log("aionres remote fail \(rel): \(String(describing: error))")
                 urlSchemeTask.didFailWithError(error ?? NSError(domain: "aionres", code: 3))
             }
         }.resume()

@@ -76,6 +76,7 @@ struct AionWebView: UIViewRepresentable {
         init(parent: AionWebView) { self.parent = parent }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            AionLogger.shared.log("webview didFinish url=\(webView.url?.absoluteString ?? "nil")")
             Task { @MainActor in
                 self.parent.model.failed = false
                 APIClient.shared.markVerified()
@@ -85,11 +86,13 @@ struct AionWebView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             // 用户主动点链接造成的取消不算失败
             guard (error as NSError).code != NSURLErrorCancelled else { return }
+            AionLogger.shared.log("webview didFail url=\(webView.url?.absoluteString ?? "nil") err=\((error as NSError).code)")
             DispatchQueue.main.async { self.parent.model.failed = true }
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             guard (error as NSError).code != NSURLErrorCancelled else { return }
+            AionLogger.shared.log("webview didFailProvisional url=\(webView.url?.absoluteString ?? "nil") err=\((error as NSError).code)")
             Task { @MainActor in
                 // 基址挂了：跳过当前候选，探测下一个（家里 LAN → 出门 TS 自动切换）
                 if let url = await APIClient.shared.retryAfterFailure() {

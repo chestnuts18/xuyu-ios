@@ -160,6 +160,7 @@ final class APIClient: ObservableObject {
     }
 
     private func adopt(_ candidate: Candidate) {
+        AionLogger.shared.log("apiclient adopt base=\(candidate.url.absoluteString) (prev=\(baseURL.absoluteString))")
         if candidate.url == baseURL {
             lastVerifiedAt = Date()
             currentToken = candidate.token

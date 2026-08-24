@@ -53,6 +53,17 @@ final class AionJSBridge {
       // 原生推的同步缓存（网页同步读；更新时派发事件）
       root.__aionSyncCache = {};
 
+      // 页面 JS 错误上报（2026-08-25 流量白屏排查）：window error 钩子 →
+      // 原生 AionLogger，客户端日志直接看页面崩在哪一行。
+      window.addEventListener('error', function(e){
+        try {
+          window.webkit.messageHandlers.aionBridge.postMessage({
+            bridge:'diag', action:'jserror',
+            args:{msg:String(e.message||'').slice(0,200), src:((e.filename||'')+'@'+(e.lineno||0)).slice(0,200)}
+          });
+        } catch(_) {}
+      });
+
       root.__aionBridgeDispatch = function(name, payload) {
         try {
           if (name === 'cache') {
@@ -198,6 +209,14 @@ final class AionJSBridge {
 
     private func dispatch(_ req: BridgeRequest) async -> Any? {
         switch req.bridge {
+        case "diag":
+            if req.action == "jserror", let a = req.args {
+                let msg = a["msg"] as? String ?? ""
+                let src = a["src"] as? String ?? ""
+                AionLogger.shared.log("js error: \(msg) at \(src)")
+            }
+            return nil
+
         case "ble":
             return await ToyBLEManager.shared.handle(action: req.action, args: req.args)
 
