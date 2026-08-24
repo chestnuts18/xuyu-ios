@@ -47,7 +47,7 @@ final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
             urlSchemeTask.didFailWithError(NSError(domain: "aionres", code: 2))
             return
         }
-        AionLogger.shared.log("aionres miss \(rel) -> \(remote.absoluteString)")
+        AionLogger.shared.log("aionres miss \(rel) -> \(remote.absoluteString) mainThread=\(Thread.isMainThread)")
         var req = URLRequest(url: remote)
         req.timeoutInterval = 15
         if let t = APIClient.sharedToken {
@@ -57,10 +57,11 @@ final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
         taskLock.lock()
         activeTasks.insert(taskID)
         taskLock.unlock()
-        // async 版 data(for:)：与 APIClient 探测同款路径（completion 版 dataTask
-        // 在 scheme handler 线程上回调不触发——2026-08-25 白屏实测，兜底请求
-        // 从未到达 CF；探测用的 async 版每次 200）
-        Task {
+        // ⚠️ Task 必须显式 @MainActor：WKURLSchemeHandler.start 所在线程没有
+        // RunLoop 在转，Task 继承该上下文后 URLSession 回调永远不被投递——
+        // 请求发出后无声挂死（无成功/失败/超时，2026-08-25 白屏实测根因）。
+        // 主线程 RunLoop 常转，与 APIClient 探测（每次 200）同款环境。
+        Task { @MainActor in
             do {
                 let (data, resp) = try await URLSession.shared.data(for: req)
                 self.taskLock.lock()
