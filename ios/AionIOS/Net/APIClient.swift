@@ -113,7 +113,7 @@ final class APIClient: ObservableObject {
         probeTask?.cancel()
         probeTask = Task { [weak self] in
             guard let self else { return }
-            let ordered = Self.orderedCandidatesForCurrentPath()
+            let ordered = self.orderedCandidatesForCurrentPath()
             if !ordered.isEmpty {
                 // 并行探测：总耗时 = 最慢一个候选（3s），蜂窝下不再串行等 LAN 超时
                 let results = await withTaskGroup(
