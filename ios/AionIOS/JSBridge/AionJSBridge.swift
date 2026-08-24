@@ -76,7 +76,8 @@ final class AionJSBridge {
       // 打包的 fetch 拦截器 patch 到了 common.js，而 chat.html 不引用 common.js——
       // 聊天页从未装上拦截器，相对请求被路由进 scheme handler 兜底挂死。
       // 注入脚本 atDocumentStart 全 frame 生效，不依赖页面引用链。
-      // 服务器已放行本页 origin 的 CORS（念宝批准 2026-08-25）。
+      // credentials:'include' 关键：跨源 fetch 默认不带 Cookie，CF WAF 会 403
+      //（服务器已放行本页 origin 的 CORS + allow_credentials，念宝批准 2026-08-25）。
       try {
         if (!window.__aionFetchPatched) {
           window.__aionFetchPatched = true;
@@ -84,6 +85,8 @@ final class AionJSBridge {
           window.fetch = function(url, opts) {
             if (typeof url === 'string' && (url.indexOf('/api/') === 0 || url.indexOf('/ws') === 0)) {
               if (url.indexOf('/api/') === 0) url = (window.AION_API_BASE || '') + url;
+              opts = opts || {};
+              opts.credentials = 'include';
             }
             return _fetchOrig.call(window, url, opts);
           };
