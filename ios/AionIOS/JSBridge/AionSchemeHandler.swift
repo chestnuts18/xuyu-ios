@@ -37,6 +37,11 @@ final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
             let file = root.appendingPathComponent(rel)
             if fileManager.fileExists(atPath: file.path),
                let data = try? Data(contentsOf: file) {
+                // 主资源加载打点（2026-08-25 频闪排查：页面 didFinish 不再出现，
+                // 需要看到 handler 是否被调、加载链走到哪）
+                if rel.hasSuffix(".html") || rel.hasSuffix(".js") || rel.hasSuffix(".css") {
+                    AionLogger.shared.log("aionres hit \(rel) bytes=\(data.count)")
+                }
                 finish(task: urlSchemeTask, url: url, data: data, mime: Self.mime(for: file.pathExtension), cors: false)
                 return
             }
