@@ -40,4 +40,33 @@ final class AionHealthUploader {
             return false
         }
     }
+
+    /// POST /api/health/workouts —— HKWorkout 落库（运动教练链路 2026-08-25）
+    func uploadWorkout(entry: [String: Any]) async -> Bool {
+        var request = URLRequest(
+            url: APIClient.shared.url(for: "/api/health/workouts"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let t = APIClient.shared.currentToken {
+            request.setValue(t, forHTTPHeaderField: "X-Aion-Token")
+        }
+        request.timeoutInterval = 20
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: entry)
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let ok = code == 200
+            if ok {
+                APIClient.shared.markVerified()
+            } else {
+                APIClient.shared.noteFailure()
+            }
+            AionLogger.shared.log("hk workout upload http=\(code)")
+            return ok
+        } catch {
+            APIClient.shared.noteFailure()
+            AionLogger.shared.log("hk workout upload failed: \(error.localizedDescription)")
+            return false
+        }
+    }
 }

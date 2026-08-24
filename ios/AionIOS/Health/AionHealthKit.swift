@@ -36,6 +36,20 @@ final class AionHealthKit: ObservableObject {
         .basalEnergyBurned,
         .walkingHeartRateAverage,
         .bodyMass,
+        // 体能指标（2026-08-25 念宝拍板「全套都要」）：VO2Max/心率恢复
+        .vo2Max,
+        .heartRateRecoveryOneMinute,
+        // 步态分析（手表自动测）
+        .walkingSpeed,
+        .walkingStepLength,
+        .walkingDoubleSupportPercentage,
+        .walkingAsymmetryPercentage,
+        // 跑步动力学（手表跑步才有值）
+        .runningPower,
+        .runningVerticalOscillation,
+        .runningGroundContactTime,
+        // 耳机音量暴露
+        .headphoneAudioExposure,
     ]
 
     private let sleepType: HKCategoryType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis)!
@@ -45,6 +59,7 @@ final class AionHealthKit: ObservableObject {
     private init() {
         uploadedUUIDs = Set(UserDefaults.standard.stringArray(forKey: uuidKey) ?? [])
         uploadedSleepDates = Set(UserDefaults.standard.stringArray(forKey: sleepKey) ?? [])
+        uploadedWorkoutUUIDs = Set(UserDefaults.standard.stringArray(forKey: workoutUUIDKey) ?? [])
         refreshAuthStatus()
     }
 
@@ -126,7 +141,70 @@ final class AionHealthKit: ObservableObject {
         await uploadQuantities(frequentTypes, window: 45 * 60)
         await uploadQuantities(infrequentTypes, window: 24 * 3600)
         await uploadSleep(window: 24 * 3600)
+        await uploadWorkouts(window: 72 * 3600)
         AionLogger.shared.log("hk upload cycle end, lastInfo=\(lastUploadInfo)")
+    }
+
+    // MARK: - 锻炼记录（HKWorkout → POST /api/health/workouts，运动教练链路 2026-08-25）
+
+    private var uploadedWorkoutUUIDs: Set<String> = []
+    private let workoutUUIDKey = "health_uploaded_workout_uuids"
+
+    private func uploadWorkouts(window: TimeInterval) async {
+        let end = Date()
+        let start = end.addingTimeInterval(-window)
+        let samples: [HKWorkout] = await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: HKObjectType.workoutType(),
+                predicate: HKQuery.predicateForSamples(
+                    withStart: start, end: end, options: .strictStartDate
+                ),
+                limit: HKObjectQueryNoLimit, sortDescriptors: nil
+            ) { _, s, _ in
+                continuation.resume(returning: (s as? [HKWorkout]) ?? [])
+            }
+            store.execute(query)
+        }
+        for w in samples {
+            guard !uploadedWorkoutUUIDs.contains(w.uuid.uuidString) else { continue }
+            let entry: [String: Any] = [
+                "device_name": DeviceIdentity.deviceId,
+                "workout_type": Self.workoutTypeName(w.workoutActivityType),
+                "start_at": w.startDate.timeIntervalSince1970,
+                "end_at": w.endDate.timeIntervalSince1970,
+                "duration_min": round(w.duration / 60 * 10) / 10,
+                "calories_burned": round(
+                    (w.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0) * 10) / 10,
+                "distance_km": round(
+                    (w.totalDistance?.doubleValue(for: .meter()) ?? 0) / 1000 * 100) / 100,
+                "source": "aion_ios",
+            ]
+            if await AionHealthUploader.shared.uploadWorkout(entry: entry) {
+                uploadedWorkoutUUIDs.insert(w.uuid.uuidString)
+                let arr = Array(uploadedWorkoutUUIDs).sorted().suffix(120)
+                uploadedWorkoutUUIDs = Set(arr)
+                UserDefaults.standard.set(Array(arr), forKey: workoutUUIDKey)
+                AionLogger.shared.log(
+                    "hk workout uploaded: \(Self.workoutTypeName(w.workoutActivityType))")
+            }
+        }
+    }
+
+    static func workoutTypeName(_ t: HKWorkoutActivityType) -> String {
+        switch t {
+        case .running: return "running"
+        case .walking: return "walking"
+        case .cycling: return "cycling"
+        case .swimming: return "swimming"
+        case .highIntensityIntervalTraining: return "hiit"
+        case .traditionalStrengthTraining, .functionalStrengthTraining: return "strength"
+        case .yoga: return "yoga"
+        case .hiking: return "hiking"
+        case .dance: return "dance"
+        case .pilates: return "pilates"
+        case .badminton, .tennis, .tableTennis: return "racket"
+        default: return "other"
+        }
     }
 
     // MARK: - Quantity 上报（UUID 去重，幂等）
@@ -288,13 +366,24 @@ final class AionHealthKit: ObservableObject {
         case .basalEnergyBurned: return "basal_energy_burned"
         case .walkingHeartRateAverage: return "walking_heart_rate_average"
         case .bodyMass: return "body_mass"
+        case .vo2Max: return "vo2_max"
+        case .heartRateRecoveryOneMinute: return "heart_rate_recovery"
+        case .walkingSpeed: return "walking_speed"
+        case .walkingStepLength: return "walking_step_length"
+        case .walkingDoubleSupportPercentage: return "walking_double_support"
+        case .walkingAsymmetryPercentage: return "walking_asymmetry"
+        case .runningPower: return "running_power"
+        case .runningVerticalOscillation: return "running_vertical_oscillation"
+        case .runningGroundContactTime: return "running_ground_contact_time"
+        case .headphoneAudioExposure: return "headphone_audio_exposure"
         default: return id.rawValue
         }
     }
 
     static func unitName(for id: HKQuantityTypeIdentifier) -> String {
         switch id {
-        case .heartRate, .restingHeartRate, .respiratoryRate, .walkingHeartRateAverage:
+        case .heartRate, .restingHeartRate, .respiratoryRate, .walkingHeartRateAverage,
+             .heartRateRecoveryOneMinute:
             return "count/min"
         case .stepCount, .flightsClimbed: return "count"
         case .activeEnergyBurned, .basalEnergyBurned: return "kcal"
@@ -303,13 +392,22 @@ final class AionHealthKit: ObservableObject {
         case .heartRateVariabilitySDNN: return "ms"
         case .oxygenSaturation: return "%"
         case .bodyMass: return "kg"
+        case .vo2Max: return "mL/kg/min"
+        case .walkingSpeed: return "m/s"
+        case .walkingStepLength: return "m"
+        case .walkingDoubleSupportPercentage, .walkingAsymmetryPercentage: return "%"
+        case .runningPower: return "W"
+        case .runningVerticalOscillation: return "cm"
+        case .runningGroundContactTime: return "ms"
+        case .headphoneAudioExposure: return "dBASPL"
         default: return ""
         }
     }
 
     static func unit(for id: HKQuantityTypeIdentifier) -> HKUnit {
         switch id {
-        case .heartRate, .restingHeartRate, .respiratoryRate, .walkingHeartRateAverage:
+        case .heartRate, .restingHeartRate, .respiratoryRate, .walkingHeartRateAverage,
+             .heartRateRecoveryOneMinute:
             return HKUnit.count().unitDivided(by: .minute())
         case .stepCount, .flightsClimbed:
             return .count()
@@ -325,6 +423,24 @@ final class AionHealthKit: ObservableObject {
             return .percent()
         case .bodyMass:
             return HKUnit.gramUnit(with: .kilo)
+        case .vo2Max:
+            return HKUnit.literUnit(with: .milli)
+                .unitDivided(by: .minute())
+                .unitDivided(by: HKUnit.gramUnit(with: .kilo))
+        case .walkingSpeed:
+            return HKUnit.meter().unitDivided(by: .second())
+        case .walkingStepLength:
+            return .meter()
+        case .walkingDoubleSupportPercentage, .walkingAsymmetryPercentage:
+            return .percent()
+        case .runningPower:
+            return .watt()
+        case .runningVerticalOscillation:
+            return HKUnit.meterUnit(with: .centi)
+        case .runningGroundContactTime:
+            return HKUnit.secondUnit(with: .milli)
+        case .headphoneAudioExposure:
+            return .decibelAWeightedSoundPressureLevel()
         default:
             return .count()
         }

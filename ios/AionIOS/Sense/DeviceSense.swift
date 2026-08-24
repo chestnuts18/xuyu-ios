@@ -17,6 +17,7 @@ final class DeviceSense: ObservableObject {
     private var slots: [String: Slot] = [:]
     private var started = false
     private var lastHeartbeatAt: Date = .distantPast
+    private var lastMeasureAt: Double = 0
     private var tickTask: Task<Void, Never>?
     private var timer: Timer?
     private var lastContinuousPosture: String?
@@ -167,6 +168,28 @@ final class DeviceSense: ObservableObject {
         if ok, !changed.isEmpty {
             AionLogger.shared.log(
                 "sense changed=\(changed.sorted().joined(separator: ",")) reason=\(reason)")
+        }
+
+        // 气压/配速低频测量（30 分钟一次；气压变化 <0.1 hPa 不报，抄 HA 弱信号门控）
+        if nowEpoch - lastMeasureAt >= 1800 {
+            lastMeasureAt = nowEpoch
+            let m = await SenseMeasure.shared.oneShot()
+            var metrics: [[String: Any]] = []
+            if let p = m.pressure, SenseMeasure.shared.shouldReportPressure(p) {
+                metrics.append([
+                    "type": "barometric_pressure", "value": round(p * 100) / 100,
+                    "unit": "hPa", "recorded_at": nowEpoch, "source": "aion_ios_sense",
+                ])
+            }
+            if let pace = m.pace {
+                metrics.append([
+                    "type": "active_pace", "value": round(pace * 100) / 100,
+                    "unit": "m/s", "recorded_at": nowEpoch, "source": "aion_ios_sense",
+                ])
+            }
+            if !metrics.isEmpty {
+                _ = await AionHealthUploader.shared.upload(metrics: metrics)
+            }
         }
     }
 
