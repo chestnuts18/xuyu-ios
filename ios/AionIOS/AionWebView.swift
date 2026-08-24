@@ -80,15 +80,22 @@ struct AionWebView: UIViewRepresentable {
             // 白屏排查：原生直接读页面运行时状态（不依赖注入脚本自报）
             webView.evaluateJavaScript("""
             (function(){
+              var mb = '?';
+              try { mb = typeof window.webkit.messageHandlers.aionBridge; } catch(e) { mb = 'err'; }
+              var fn = localStorage.getItem('aion_fetch_n') || '0';
+              var fl = localStorage.getItem('aion_fetch_last') || '';
               return {
                 base: (window.AION_API_BASE !== undefined) ? String(window.AION_API_BASE).slice(0,100) : 'UNDEFINED',
                 hasBridge: typeof window.__aionBridgeDispatch === 'function',
-                hasAionBle: typeof window.AionBle === 'object'
+                hasAionBle: typeof window.AionBle === 'object',
+                msgHandler: mb,
+                fetchN: fn,
+                fetchLast: fl
               };
             })()
             """) { result, _ in
                 if let d = result as? [String: Any] {
-                    AionLogger.shared.log("page state: base=\(d["base"] ?? "?") bridge=\(d["hasBridge"] ?? "?") ble=\(d["hasAionBle"] ?? "?")")
+                    AionLogger.shared.log("page state: base=\(d["base"] ?? "?") bridge=\(d["hasBridge"] ?? "?") ble=\(d["hasAionBle"] ?? "?") mb=\(d["msgHandler"] ?? "?") fetchN=\(d["fetchN"] ?? "?") fetchLast=\(d["fetchLast"] ?? "?")")
                 } else {
                     AionLogger.shared.log("page state read failed: \(String(describing: result))")
                 }

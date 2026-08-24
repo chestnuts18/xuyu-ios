@@ -48,12 +48,13 @@ final class AionJSBridge {
               if (url.indexOf('/api/') === 0) url = (window.AION_API_BASE || '') + url;
               opts = opts || {};
               opts.credentials = 'include';
-              // 白屏排查：记录最终 URL 到原生日志
+              // 白屏排查：写 localStorage（didFinish 原生 evaluateJavaScript 读——
+              // 不依赖 messageHandlers，验证 fetch 拦截器是否真的被调用）
               try {
-                window.webkit.messageHandlers.aionBridge.postMessage({
-                  bridge:'diag', action:'fetchreq',
-                  args:{u: String(url).slice(0, 100)}
-                });
+                var n = parseInt(localStorage.getItem('aion_fetch_n') || '0', 10) + 1;
+                localStorage.setItem('aion_fetch_n', String(n));
+                localStorage.setItem('aion_fetch_last', String(url).slice(0, 120));
+                localStorage.setItem('aion_fetch_t', String(Date.now()));
               } catch(eLog) {}
             }
             return _fetchOrig.call(window, url, opts);
