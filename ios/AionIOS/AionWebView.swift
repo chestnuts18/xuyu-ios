@@ -117,9 +117,12 @@ struct AionWebView: UIViewRepresentable {
             guard (error as NSError).code != NSURLErrorCancelled else { return }
             AionLogger.shared.log("webview didFailProvisional url=\(webView.url?.absoluteString ?? "nil") err=\((error as NSError).code)")
             Task { @MainActor in
-                // 基址挂了：跳过当前候选，探测下一个（家里 LAN → 出门 TS 自动切换）
-                if let url = await APIClient.shared.retryAfterFailure() {
-                    webView.load(URLRequest(url: url))
+                // 基址挂了：跳过当前候选，探测下一个（家里 LAN → 出门 TS 自动切换）。
+                // ⚠️ 主文档永远回本地 aionres 页（2026-08-25 频闪根因：失败后
+                // load 远程候选 URL，页面在本地/远程之间反复横跳；基址切换
+                // 由 adopt → onBaseURLChanged → 重注册脚本 + 本地 reload 完成）
+                if await APIClient.shared.retryAfterFailure() != nil {
+                    webView.load(URLRequest(url: URL(string: "\(AionSchemeHandler.scheme)://\(AionSchemeHandler.host)/chat")!))
                 } else {
                     self.parent.model.failed = true
                 }
