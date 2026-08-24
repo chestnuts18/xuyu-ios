@@ -237,11 +237,11 @@ extension AionCameraModule: AVCaptureVideoDataOutputSampleBufferDelegate {
     }
 
     nonisolated static func sharedStateForEncode() -> (shouldEncode: Bool, consumers: [(CVPixelBuffer, CMTime) -> Void]) {
-        CameraSharedStateHolder.shared.snapshotForEncode()
+        CameraSharedStateHolder.shared.state.snapshotForEncode()
     }
 
     nonisolated static func sharedStateStoreFrame(b64: String, rotatedW: Int, rotatedH: Int) {
-        CameraSharedStateHolder.shared.storeFrame(b64: b64, rotatedW: rotatedW, rotatedH: rotatedH)
+        CameraSharedStateHolder.shared.state.storeFrame(b64: b64, rotatedW: rotatedW, rotatedH: rotatedH)
     }
 
     /// 像素缓冲 → 竖转 90° → JPEG base64（无 data: 前缀，对齐网页契约）
