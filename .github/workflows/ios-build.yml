@@ -20,7 +20,7 @@ jobs:
             -H "Accept: application/vnd.github.raw" \
             "https://api.github.com/repos/chestnuts18/aion-web-assets/contents/web-assets-pack.zip?ref=main" \
             -o web-assets-pack.zip
-          unzip -q web-assets-pack.zip -d ios/AionIOS/WebAssets
+          python3 -c "import zipfile; zipfile.ZipFile('web-assets-pack.zip').extractall('ios/AionIOS/WebAssets')"
           ls ios/AionIOS/WebAssets | head -5
 
       - name: Inspect DeviceActivity SDK interface (verify init API)
@@ -83,7 +83,7 @@ jobs:
             -H "Accept: application/vnd.github.raw" \
             "https://api.github.com/repos/chestnuts18/aion-web-assets/contents/web-assets-pack.zip?ref=main" \
             -o web-assets-pack.zip
-          unzip -q web-assets-pack.zip -d ios/AionIOS/WebAssets
+          python3 -c "import zipfile; zipfile.ZipFile('web-assets-pack.zip').extractall('ios/AionIOS/WebAssets')"
           ls ios/AionIOS/WebAssets | head -5
 
       - name: Install XcodeGen
