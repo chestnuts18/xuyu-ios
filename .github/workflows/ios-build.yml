@@ -125,6 +125,17 @@ jobs:
             DEVELOPMENT_TEAM=2ZSUTQ62K8 \
             CODE_SIGN_IDENTITY="Apple Development"
 
+      # 崩溃符号化（2026-08-25 流量闪退排查）：设备 .ips 里 AionIOS 主二进制帧
+      # imageOffset → atos 反查符号。主二进制链接地址 0x100000000，
+      # imageOffset 是相对运行时 image base 的，与链接地址等偏移。
+      - name: Symbolicate crash offsets
+        working-directory: ios
+        run: |
+          BIN="build/AionIOS-signed.xcarchive/dSYMs/AionIOS.app.dSYM/Contents/Resources/DWARF/AionIOS"
+          ls -la "$BIN" || echo "NO DSYM"
+          xcrun atos -arch arm64 -o "$BIN" -l 0x100000000 \
+            0x100191476 0x100196688 0x100191652 2>&1 || true
+
       - name: Package IPA
         working-directory: ios
         run: |
