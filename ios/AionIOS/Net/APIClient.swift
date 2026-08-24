@@ -113,15 +113,34 @@ final class APIClient: ObservableObject {
         probeTask?.cancel()
         probeTask = Task { [weak self] in
             guard let self else { return }
-            for candidate in Self.candidates {
+            let ordered = Self.orderedCandidatesForCurrentPath()
+            if !ordered.isEmpty {
+                // 并行探测：总耗时 = 最慢一个候选（3s），蜂窝下不再串行等 LAN 超时
+                let results = await withTaskGroup(
+                    of: (Candidate, Bool).self, returning: [(Candidate, Bool)].self
+                ) { group in
+                    for c in ordered {
+                        group.addTask { (c, await self.probe(c)) }
+                    }
+                    var out: [(Candidate, Bool)] = []
+                    for await r in group { out.append(r) }
+                    return out
+                }
                 if Task.isCancelled { return }
-                if await self.probe(candidate) {
-                    guard !Task.isCancelled else { return }
-                    self.adopt(candidate)
-                    return
+                if let hit = results.first(where: { $0.1 }) {
+                    self.adopt(hit.0)
                 }
             }
         }
+    }
+
+    /// 蜂窝网络下跳过局域网候选（流量时 LAN 必不通，省 3 秒串行超时）
+    private func orderedCandidatesForCurrentPath() -> [Candidate] {
+        var list = Self.candidates
+        if monitor.currentPath.usesInterfaceType(.cellular) {
+            list.removeAll { $0.url.absoluteString.hasPrefix("http://192.168.") }
+        }
+        return list
     }
 
     /// GET /api/health/injection：读内存缓存摘要，最轻、无副作用，2xx 即胜出
