@@ -168,9 +168,23 @@ struct AionWebView: UIViewRepresentable {
             completionHandler(nil)
         }
 
-        // target=_blank 链接在当前页打开
+        // 主文档绝不允许离开本地 aionres（2026-08-25 空白/横跳根因：
+        // target=_blank 的绝对基址链接把主 frame 导航到远程页——远程页
+        // 在流量下数据链失效；且远程导航与本地 handler 反复横跳）
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            if navigationAction.targetFrame?.isMainFrame == true,
+               let url = navigationAction.request.url,
+               url.scheme != AionSchemeHandler.scheme {
+                AionLogger.shared.log("blocked remote nav: \(url.absoluteString)")
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(.allow)
+        }
+
+        // target=_blank 链接：仅本地 aionres 在当前页打开，外链忽略
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-            if let url = navigationAction.request.url {
+            if let url = navigationAction.request.url, url.scheme == AionSchemeHandler.scheme {
                 webView.load(URLRequest(url: url))
             }
             return nil
