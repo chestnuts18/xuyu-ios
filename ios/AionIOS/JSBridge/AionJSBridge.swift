@@ -72,6 +72,24 @@ final class AionJSBridge {
         });
       } catch(e2) {}
 
+      // fetch 相对 /api/ /ws 补基址 → 网络层直连（2026-08-25 流量白屏最终根因：
+      // 打包的 fetch 拦截器 patch 到了 common.js，而 chat.html 不引用 common.js——
+      // 聊天页从未装上拦截器，相对请求被路由进 scheme handler 兜底挂死。
+      // 注入脚本 atDocumentStart 全 frame 生效，不依赖页面引用链。
+      // 服务器已放行本页 origin 的 CORS（念宝批准 2026-08-25）。
+      try {
+        if (!window.__aionFetchPatched) {
+          window.__aionFetchPatched = true;
+          var _fetchOrig = window.fetch;
+          window.fetch = function(url, opts) {
+            if (typeof url === 'string' && (url.indexOf('/api/') === 0 || url.indexOf('/ws') === 0)) {
+              if (url.indexOf('/api/') === 0) url = (window.AION_API_BASE || '') + url;
+            }
+            return _fetchOrig.call(window, url, opts);
+          };
+        }
+      } catch(e3a) {}
+
       // XHR 相对路径补基址（fetch 拦截器只拦 fetch；页面部分请求走 XHR，
       // 相对 /api/ 在 aionres:// 源下会被路由进 scheme handler = 白屏根因之一）
       try {
