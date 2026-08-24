@@ -87,6 +87,13 @@ final class AionJSBridge {
               if (url.indexOf('/api/') === 0) url = (window.AION_API_BASE || '') + url;
               opts = opts || {};
               opts.credentials = 'include';
+              // 白屏排查：记录最终 URL 到原生日志
+              try {
+                window.webkit.messageHandlers.aionBridge.postMessage({
+                  bridge:'diag', action:'fetchreq',
+                  args:{u: String(url).slice(0, 100)}
+                });
+              } catch(eLog) {}
             }
             return _fetchOrig.call(window, url, opts);
           };
@@ -265,6 +272,9 @@ final class AionJSBridge {
             } else if req.action == "injected" {
                 let base = req.args["base"] as? String ?? ""
                 AionLogger.shared.log("inject ok base=\(base)")
+            } else if req.action == "fetchreq" {
+                let u = req.args["u"] as? String ?? ""
+                AionLogger.shared.log("fetch -> \(u)")
             }
             return nil
 
