@@ -203,12 +203,16 @@ final class APIClient: ObservableObject {
             completion()
             return
         }
+        // SameSite=None 关键：页面源 aionres://aion 与 api-*.kuriyu.love 是跨站，
+        // 默认 Lax 的 Cookie 不会随跨站 fetch 发出（2026-08-25 白屏：WAF 403
+        // 无凭证的真实原因——Cookie 种了但浏览器扣下不发）。
         let props: [HTTPCookiePropertyKey: Any] = [
             .domain: host,
             .path: "/",
             .name: "AionToken",
             .value: token,
             .secure: "TRUE",
+            HTTPCookiePropertyKey(rawValue: "SameSite"): "None",
             .expires: Date().addingTimeInterval(30 * 24 * 3600),
         ]
         guard let cookie = HTTPCookie(properties: props) else {
