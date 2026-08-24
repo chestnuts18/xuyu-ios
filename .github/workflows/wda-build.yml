@@ -1,0 +1,43 @@
+name: Build WDA IPA (unsigned, zsign 后签名)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone WebDriverAgent
+        run: |
+          git clone --depth 1 https://github.com/appium/WebDriverAgent.git
+
+      - name: Build WebDriverAgentRunner (unsigned)
+        run: |
+          cd WebDriverAgent
+          xcodebuild build-for-testing \
+            -project WebDriverAgent.xcodeproj \
+            -scheme WebDriverAgentRunner \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PRODUCT_BUNDLE_IDENTIFIER=com.chestnuts.aionios.wda.xctrunner \
+            -derivedDataPath build
+
+      - name: Package IPA
+        run: |
+          APP=$(find WebDriverAgent/build/Build/Products -name "WebDriverAgentRunner-Runner.app" | head -1)
+          echo "APP=$APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          chmod -R 755 Payload
+          zip -qr WDA-unsigned.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: WDA-ipa
+          path: WDA-unsigned.ipa
+          retention-days: 30

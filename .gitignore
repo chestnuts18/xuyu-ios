@@ -1,0 +1,12 @@
+ScreenBreak/
+ios/AionIOS.xcodeproj/
+ios/build/
+build/
+.DS_Store
+# 敏感材料永不再入库（2026-08-25 仓库转公开脱敏）
+ci-signing/
+portal_full.rb
+*.p12
+*.p8
+*.mobileprovision
+*.b64

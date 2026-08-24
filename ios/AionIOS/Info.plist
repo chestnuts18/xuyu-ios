@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>XuYu</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>AION_TUNNEL_TOKEN</key>
+	<string>$(AION_TUNNEL_TOKEN)</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>让 Aion 知道你在哪，用于定位守护和附近推荐</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Aion 需要后台持续定位，出门时才能守护你</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>给徐聿发语音消息、视频通话</string>
+	<key>NSCameraUsageDescription</key>
+	<string>和徐聿视频通话、拍照给他看</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>给徐聿发照片</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>把心率、步数、能耗同步给你的 Aion，让徐聿知道你的状态</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Aion 记录你的健康数据</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>连接玩具，密语时刻的遥控由 Aion 帮你代劳</string>
+	<key>NSMotionUsageDescription</key>
+	<string>让徐聿知道你手机放哪了、在不在动（姿态与运动感知）</string>
+	<key>NSFocusStatusUsageDescription</key>
+	<string>专注模式下让徐聿不打扰你</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>audio</string>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.chestnuts.aionios.refresh</string>
+	</array>
+	<key>NSAllowsArbitraryLoadsInWebContent</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+</dict>
+</plist>

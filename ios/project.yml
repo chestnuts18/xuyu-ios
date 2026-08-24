@@ -1,0 +1,48 @@
+name: AionIOS
+options:
+  bundleIdPrefix: com.chestnuts
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    TARGETED_DEVICE_FAMILY: "1"
+targets:
+  AionIOS:
+    type: application
+    platform: iOS
+    sources:
+      - AionIOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.chestnuts.aionios
+        INFOPLIST_FILE: AionIOS/Info.plist
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: 2ZSUTQ62K8
+        PROVISIONING_PROFILE_SPECIFIER: 72fc79ce-95c6-42c2-9f29-271b6e788134
+    entitlements:
+      path: AionIOS/AionIOS.entitlements
+      properties:
+        aps-environment: development
+        com.apple.developer.family-controls: true
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.background-delivery: true
+        com.apple.security.application-groups:
+          - group.com.chestnuts.aionios.lock
+# MonitorExtension（B3 计时自动锁）已移除：iOS 26.6 系统 bug 扩展零唤醒（23G71），
+# 且其 profile 未随 8-17 证书轮换更新，拖垮 build-signed。源码目录保留不构建。
+schemes:
+  AionIOS:
+    build:
+      targets:
+        AionIOS: all
+    archive:
+      config: Release
+    shared: true
+  AionIOSNoExt:
+    build:
+      targets:
+        AionIOS: all
+    archive:
+      config: Release
+    shared: true
