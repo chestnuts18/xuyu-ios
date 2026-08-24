@@ -31,20 +31,20 @@ final class SenseSystem {
         let nc = NotificationCenter.default
         nc.addObserver(forName: UIDevice.batteryStateDidChangeNotification,
                        object: nil, queue: .main) { _ in
-            AionLogger.shared.log("sense battery state changed")
+            Task { @MainActor in AionLogger.shared.log("sense battery state changed") }
         }
         nc.addObserver(forName: UIDevice.batteryLevelDidChangeNotification,
                        object: nil, queue: .main) { _ in
-            AionLogger.shared.log("sense battery level changed")
+            Task { @MainActor in AionLogger.shared.log("sense battery level changed") }
         }
         // 锁屏/解锁公开轨：仅设了开机密码的设备触发
         nc.addObserver(forName: UIApplication.protectedDataWillBecomeUnavailableNotification,
                        object: nil, queue: .main) { [weak self] _ in
-            self?.handleProtectedWillBecomeUnavailable()
+            Task { @MainActor in self?.handleProtectedWillBecomeUnavailable() }
         }
         nc.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification,
                        object: nil, queue: .main) { [weak self] _ in
-            self?.handleProtectedDidBecomeAvailable()
+            Task { @MainActor in self?.handleProtectedDidBecomeAvailable() }
         }
         installPrivateTrack()
     }

@@ -38,7 +38,7 @@ final class AionVideoModule {
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("aion_rec_\(UUID().uuidString).mp4")
         do {
-            let w = AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+            let w = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
             let settings: [String: Any] = [
                 AVVideoCodecKey: AVVideoCodecType.h264,
                 AVVideoWidthKey: max(160, width),

@@ -115,7 +115,12 @@ final class AionPhoneCameraModule: NSObject {
             if session.canAddOutput(photoOutput) { session.addOutput(photoOutput) }
             session.commitConfiguration()
             if let conn = videoOutput.connection(with: .video) {
-                conn.videoRotationAngle = 90
+                // videoRotationAngle 是 iOS 17+ API，部署目标 16 用旧接口
+                if #available(iOS 17.0, *) {
+                    conn.videoRotationAngle = 90
+                } else {
+                    conn.videoOrientation = .portrait
+                }
             }
             session.startRunning()
             return true
