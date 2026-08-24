@@ -48,8 +48,15 @@ final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
             return
         }
         AionLogger.shared.log("aionres miss \(rel) -> \(remote.absoluteString) mainThread=\(Thread.isMainThread)")
+        // 转发原始 method/body（POST 创建对话等走这里——此前丢成 GET，
+        // 2026-08-25「点新对话卡死」根因）
         var req = URLRequest(url: remote)
+        req.httpMethod = urlSchemeTask.request.httpMethod ?? "GET"
+        req.httpBody = urlSchemeTask.request.httpBody
         req.timeoutInterval = 15
+        if let ct = urlSchemeTask.request.value(forHTTPHeaderField: "Content-Type") {
+            req.setValue(ct, forHTTPHeaderField: "Content-Type")
+        }
         if let t = APIClient.sharedToken {
             req.setValue(t, forHTTPHeaderField: "X-Aion-Token")
         }
