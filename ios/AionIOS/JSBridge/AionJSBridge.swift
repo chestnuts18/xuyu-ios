@@ -31,6 +31,36 @@ final class AionJSBridge {
         if (window.top && window.top !== window) { root = window.top; }
       } catch (e) { root = window; }   // 沙箱拒绝访问 top 时降级为本 frame
 
+      // fetch 相对 /api/ /ws 补基址 → 网络层直连（2026-08-25 流量白屏最终根因：
+      // 打包的 fetch 拦截器 patch 到了 common.js，而 chat.html 不引用 common.js——
+      // 聊天页从未装上拦截器，相对请求被路由进 scheme handler 兜底挂死）。
+      // ⚠️ 必须放在 __aionBridgeInstalled 检查之前：隐藏 iframe 会先注入并挂上
+      // installed 标记，主 frame 后注入时走 linkFrame+return——若放后面主 frame
+      // 永远跳过拦截器安装（6:00 实测 /api/ 仍走相对 miss 的原因）。
+      // credentials:'include' 关键：跨源 fetch 默认不带 Cookie，CF WAF 会 403
+      //（服务器已放行本页 origin 的 CORS + allow_credentials，念宝批准）。
+      try {
+        if (!window.__aionFetchPatched) {
+          window.__aionFetchPatched = true;
+          var _fetchOrig = window.fetch;
+          window.fetch = function(url, opts) {
+            if (typeof url === 'string' && (url.indexOf('/api/') === 0 || url.indexOf('/ws') === 0)) {
+              if (url.indexOf('/api/') === 0) url = (window.AION_API_BASE || '') + url;
+              opts = opts || {};
+              opts.credentials = 'include';
+              // 白屏排查：记录最终 URL 到原生日志
+              try {
+                window.webkit.messageHandlers.aionBridge.postMessage({
+                  bridge:'diag', action:'fetchreq',
+                  args:{u: String(url).slice(0, 100)}
+                });
+              } catch(eLog) {}
+            }
+            return _fetchOrig.call(window, url, opts);
+          };
+        }
+      } catch(e3a) {}
+
       function linkFrame(w, r) {
         w.__aionCall = r.__aionCall;
         w.__aionResolve = r.__aionResolve;
@@ -71,34 +101,6 @@ final class AionJSBridge {
           args:{base: String(window.AION_API_BASE || '').slice(0,120)}
         });
       } catch(e2) {}
-
-      // fetch 相对 /api/ /ws 补基址 → 网络层直连（2026-08-25 流量白屏最终根因：
-      // 打包的 fetch 拦截器 patch 到了 common.js，而 chat.html 不引用 common.js——
-      // 聊天页从未装上拦截器，相对请求被路由进 scheme handler 兜底挂死。
-      // 注入脚本 atDocumentStart 全 frame 生效，不依赖页面引用链。
-      // credentials:'include' 关键：跨源 fetch 默认不带 Cookie，CF WAF 会 403
-      //（服务器已放行本页 origin 的 CORS + allow_credentials，念宝批准 2026-08-25）。
-      try {
-        if (!window.__aionFetchPatched) {
-          window.__aionFetchPatched = true;
-          var _fetchOrig = window.fetch;
-          window.fetch = function(url, opts) {
-            if (typeof url === 'string' && (url.indexOf('/api/') === 0 || url.indexOf('/ws') === 0)) {
-              if (url.indexOf('/api/') === 0) url = (window.AION_API_BASE || '') + url;
-              opts = opts || {};
-              opts.credentials = 'include';
-              // 白屏排查：记录最终 URL 到原生日志
-              try {
-                window.webkit.messageHandlers.aionBridge.postMessage({
-                  bridge:'diag', action:'fetchreq',
-                  args:{u: String(url).slice(0, 100)}
-                });
-              } catch(eLog) {}
-            }
-            return _fetchOrig.call(window, url, opts);
-          };
-        }
-      } catch(e3a) {}
 
       // XHR 相对路径补基址（fetch 拦截器只拦 fetch；页面部分请求走 XHR，
       // 相对 /api/ 在 aionres:// 源下会被路由进 scheme handler = 白屏根因之一）
