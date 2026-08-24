@@ -45,10 +45,20 @@ struct AionWebView: UIViewRepresentable {
         webView.allowsBackForwardNavigationGestures = true
         model.webView = webView
         AionJSBridge.shared.webView = webView
-        // 候选切换后：推送新 apiBase + 重载本地页面（启动初期旧基址请求全失败——
-        // 重载让 JS 从一开始就用新基址，本地页面重载瞬间完成；同候选重复采纳不触发）
+        // 候选切换后：重新注册注入脚本（新基址）+ 重载本地页面。
+        // makeUIView 时静态替换的 {{API_BASE}} 会随 reload 原样重新注入旧基址——
+        // 流量下切到 TS/CF 后页面仍打旧 LAN → 全失败空白（2026-08-25 实测根因）。
+        // ⚠️ 不在这里 pushCache：evaluateJavaScript 与 reload 并发会撞 WebKit 竞态
+        //（空白+闪退的另一半根因），reload 后新文档自会从注入脚本拿到新基址。
         APIClient.shared.onBaseURLChanged = { [weak webView] _ in
-            AionJSBridge.shared.pushCache()
+            guard let controller = webView?.configuration.userContentController else { return }
+            controller.removeAllUserScripts()
+            controller.addUserScript(WKUserScript(
+                source: AionJSBridge.injectScript.replacingOccurrences(
+                    of: "{{API_BASE}}", with: APIClient.shared.baseURL.absoluteString),
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: false
+            ))
             webView?.reload()
         }
         // 页面走本地 aionres（秒开）；API/WS 仍走 APIClient 探测的网络基址
