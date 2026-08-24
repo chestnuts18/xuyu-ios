@@ -28,12 +28,16 @@ final class APIClient: ObservableObject {
     /// 隧道 token 经 CI Secrets 注入（Info.plist AION_TUNNEL_TOKEN 构建设置展开，
     /// signed job 用 AION_TUNNEL_TOKEN="${{ secrets... }}" xcodebuild 前缀传入）——
     /// 2026-08-25 仓库转公开脱敏：代码与历史不再落任何凭证。
-    private lazy var candidates: [Candidate] = [
-        Candidate(url: URL(string: "http://192.168.3.218:8080")!),
-        Candidate(url: URL(string: "http://100.73.222.35:8080")!),
-        Candidate(url: URL(string: "https://api-5d158ee9.kuriyu.love")!,
-                  token: Self.tunnelTokenFromBundle()),
-    ]
+    /// static 计算属性：init 里要用 candidates[0] 定基址，不能是 lazy/实例属性
+    /// （初始化阶段访问 self 会报「all stored properties are initialized 之前」）
+    private static var candidates: [Candidate] {
+        [
+            Candidate(url: URL(string: "http://192.168.3.218:8080")!),
+            Candidate(url: URL(string: "http://100.73.222.35:8080")!),
+            Candidate(url: URL(string: "https://api-5d158ee9.kuriyu.love")!,
+                      token: tunnelTokenFromBundle()),
+        ]
+    }
 
     private static func tunnelTokenFromBundle() -> String? {
         guard let v = Bundle.main.object(forInfoDictionaryKey: "AION_TUNNEL_TOKEN") as? String,
@@ -52,7 +56,7 @@ final class APIClient: ObservableObject {
            let url = URL(string: cached) {
             baseURL = url
         } else {
-            baseURL = candidates[0].url
+            baseURL = Self.candidates[0].url
         }
         // 网络路径变化（切 WiFi/开关 VPN）→ 重探，自动跟住
         monitor.pathUpdateHandler = { [weak self] _ in
@@ -75,10 +79,10 @@ final class APIClient: ObservableObject {
     /// WebView 加载失败：跳过当前候选，探测其余候选，返回可用 URL（全不通返回 nil）
     func retryAfterFailure() async -> URL? {
         probeTask?.cancel()
-        let startIdx = candidates.firstIndex { $0.url == baseURL } ?? 0
+        let startIdx = Self.candidates.firstIndex { $0.url == baseURL } ?? 0
         var order: [Candidate] = []
-        for i in 1...candidates.count {
-            let c = candidates[(startIdx + i) % candidates.count]
+        for i in 1...Self.candidates.count {
+            let c = Self.candidates[(startIdx + i) % Self.candidates.count]
             if c.url != baseURL { order.append(c) }
         }
         for candidate in order {
@@ -103,7 +107,7 @@ final class APIClient: ObservableObject {
         probeTask?.cancel()
         probeTask = Task { [weak self] in
             guard let self else { return }
-            for candidate in self.candidates {
+            for candidate in Self.candidates {
                 if Task.isCancelled { return }
                 if await self.probe(candidate) {
                     guard !Task.isCancelled else { return }
