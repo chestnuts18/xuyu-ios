@@ -14,3 +14,6 @@ portal_full.rb
 # 网页资源打包产物（Aion 前端源码，不公开）：CI 构建时从服务器拉取
 ios/AionIOS/WebAssets/
 pack_web_assets.py
+
+# 本地排查草稿（截图/IPA/脚本），不进仓库
+_diag/

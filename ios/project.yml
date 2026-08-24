@@ -13,11 +13,6 @@ targets:
     platform: iOS
     sources:
       - path: AionIOS
-        excludes:
-          - WebAssets
-      # 网页资源：folder reference 保留目录结构（2026-08-25——group 方式会把文件平铺到 bundle 根）
-      - path: AionIOS/WebAssets
-        type: folder
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.chestnuts.aionios

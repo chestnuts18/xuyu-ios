@@ -8,11 +8,6 @@ import WebKit
 final class APIClient: ObservableObject {
     static let shared = APIClient()
 
-    /// 非隔离镜像（2026-08-25）：AionSchemeHandler 在 WebKit 任意线程读基址/token，
-    /// @MainActor 隔离成员不可访问；adopt/init 时同步更新。
-    nonisolated(unsafe) static var sharedBaseURL: URL = URL(string: "http://192.168.3.218:8080")!
-    nonisolated(unsafe) static var sharedToken: String?
-
     struct Candidate {
         let url: URL
         var token: String?  // 走外网时需要 X-Aion-Token（CF Tunnel 槽位用）
@@ -63,12 +58,9 @@ final class APIClient: ObservableObject {
         } else {
             baseURL = Self.candidates[0].url
         }
-        Self.sharedBaseURL = baseURL
-        // cached 恢复时找回候选 token：冷启动 cached=CF 时不再走 adopt 全路径，
-        // token 不能丢（2026-08-25 白屏根因之一：sharedToken=nil → 兜底请求 403）
+        // cached 恢复时找回候选 token：冷启动 cached=CF 时不能丢
         if let cand = Self.candidates.first(where: { $0.url == baseURL }) {
             currentToken = cand.token
-            Self.sharedToken = cand.token
         }
         // 网络路径变化（切 WiFi/开关 VPN）→ 重探，自动跟住
         monitor.pathUpdateHandler = { [weak self] _ in
@@ -174,7 +166,6 @@ final class APIClient: ObservableObject {
     private func adopt(_ candidate: Candidate) {
         AionLogger.shared.log("apiclient adopt base=\(candidate.url.absoluteString) (prev=\(baseURL.absoluteString))")
         currentToken = candidate.token
-        Self.sharedToken = candidate.token
         lastVerifiedAt = Date()
         if candidate.url == baseURL {
             // 同候选：不 reload，但 Cookie 可能已过期/未种（冷启动 cached=CF）——
@@ -183,7 +174,6 @@ final class APIClient: ObservableObject {
             return
         }
         baseURL = candidate.url
-        Self.sharedBaseURL = candidate.url
         UserDefaults.standard.set(candidate.url.absoluteString, forKey: Self.cacheKey)
         // 隧道候选：先给 WebView 种下 AionToken Cookie 再 reload——
         // WKWebView 主 frame 加不了自定义 header，Cookie 是唯一干净路径，
@@ -203,9 +193,8 @@ final class APIClient: ObservableObject {
             completion()
             return
         }
-        // SameSite=None 关键：页面源 aionres://aion 与 api-*.kuriyu.love 是跨站，
-        // 默认 Lax 的 Cookie 不会随跨站 fetch 发出（2026-08-25 白屏：WAF 403
-        // 无凭证的真实原因——Cookie 种了但浏览器扣下不发）。
+        // SameSite=None：http→https 跨基址切换时部分 iOS 版本仍按跨站扣 Cookie，
+        // 显式 None 最稳（同源时浏览器也正常发，无害）。
         let props: [HTTPCookiePropertyKey: Any] = [
             .domain: host,
             .path: "/",

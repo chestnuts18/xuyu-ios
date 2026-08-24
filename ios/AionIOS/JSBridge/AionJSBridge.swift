@@ -20,9 +20,6 @@ final class AionJSBridge {
 
     static let injectScript = """
     (function(){
-      // API 基址（2026-08-25 网页资源打包）：本地 aionres 页面无 location.host，
-      // 所有 WS/fetch 绝对化都靠它；原生探测切换候选后经 cache 推送全 frame 更新。
-      window.AION_API_BASE = window.AION_API_BASE || '{{API_BASE}}';
       // Aion 页面全同源：桥状态统一挂 top window，跨 frame 共享 pending/缓存/事件。
       // 健康/监管页从聊天 sidebar 打开时是 iframe 子页——若不共享，子页的 promise
       // 永远等不到原生回执（evaluateJavaScript 只打到 main frame）。
@@ -30,37 +27,6 @@ final class AionJSBridge {
       try {
         if (window.top && window.top !== window) { root = window.top; }
       } catch (e) { root = window; }   // 沙箱拒绝访问 top 时降级为本 frame
-
-      // fetch 相对 /api/ /ws 补基址 → 网络层直连（2026-08-25 流量白屏最终根因：
-      // 打包的 fetch 拦截器 patch 到了 common.js，而 chat.html 不引用 common.js——
-      // 聊天页从未装上拦截器，相对请求被路由进 scheme handler 兜底挂死）。
-      // ⚠️ 必须放在 __aionBridgeInstalled 检查之前：隐藏 iframe 会先注入并挂上
-      // installed 标记，主 frame 后注入时走 linkFrame+return——若放后面主 frame
-      // 永远跳过拦截器安装（6:00 实测 /api/ 仍走相对 miss 的原因）。
-      // credentials:'include' 关键：跨源 fetch 默认不带 Cookie，CF WAF 会 403
-      //（服务器已放行本页 origin 的 CORS + allow_credentials，念宝批准）。
-      try {
-        if (!window.__aionFetchPatched) {
-          window.__aionFetchPatched = true;
-          var _fetchOrig = window.fetch;
-          window.fetch = function(url, opts) {
-            if (typeof url === 'string' && (url.indexOf('/api/') === 0 || url.indexOf('/ws') === 0)) {
-              if (url.indexOf('/api/') === 0) url = (window.AION_API_BASE || '') + url;
-              opts = opts || {};
-              opts.credentials = 'include';
-              // 白屏排查：写 localStorage（didFinish 原生 evaluateJavaScript 读——
-              // 不依赖 messageHandlers，验证 fetch 拦截器是否真的被调用）
-              try {
-                var n = parseInt(localStorage.getItem('aion_fetch_n') || '0', 10) + 1;
-                localStorage.setItem('aion_fetch_n', String(n));
-                localStorage.setItem('aion_fetch_last', String(url).slice(0, 120));
-                localStorage.setItem('aion_fetch_t', String(Date.now()));
-              } catch(eLog) {}
-            }
-            return _fetchOrig.call(window, url, opts);
-          };
-        }
-      } catch(e3a) {}
 
       function linkFrame(w, r) {
         w.__aionCall = r.__aionCall;
@@ -84,53 +50,10 @@ final class AionJSBridge {
       // 原生推的同步缓存（网页同步读；更新时派发事件）
       root.__aionSyncCache = {};
 
-      // 页面 JS 错误上报（2026-08-25 流量白屏排查）：window error 钩子 →
-      // 原生 AionLogger，客户端日志直接看页面崩在哪一行。
-      window.addEventListener('error', function(e){
-        try {
-          window.webkit.messageHandlers.aionBridge.postMessage({
-            bridge:'diag', action:'jserror',
-            args:{msg:String(e.message||'').slice(0,200), src:((e.filename||'')+'@'+(e.lineno||0)).slice(0,200)}
-          });
-        } catch(_) {}
-      });
-
-      // 注入自报（2026-08-25 白屏排查）：证明注入脚本执行了 + 基址实际值
-      try {
-        window.webkit.messageHandlers.aionBridge.postMessage({
-          bridge:'diag', action:'injected',
-          args:{base: String(window.AION_API_BASE || '').slice(0,120)}
-        });
-      } catch(e2) {}
-
-      // XHR 相对路径补基址（fetch 拦截器只拦 fetch；页面部分请求走 XHR，
-      // 相对 /api/ 在 aionres:// 源下会被路由进 scheme handler = 白屏根因之一）
-      try {
-        var _xhrOpen = XMLHttpRequest.prototype.open;
-        XMLHttpRequest.prototype.open = function(method, url) {
-          if (typeof url === 'string' && url.indexOf('/api/') === 0) {
-            url = (window.AION_API_BASE || '') + url;
-          }
-          return _xhrOpen.call(this, method, url, arguments[2], arguments[3], arguments[4]);
-        };
-      } catch(e3) {}
-
-      // 基址写入页面标题（didFinish 时原生读 title 打日志——不依赖
-      // messageHandler 的注入执行验证，2026-08-25 白屏排查）
-      try {
-        document.title = document.title + ' [aion-base=' + (window.AION_API_BASE || 'EMPTY') + ']';
-      } catch(e4) {}
-
       root.__aionBridgeDispatch = function(name, payload) {
         try {
           if (name === 'cache') {
             Object.assign(root.__aionSyncCache, payload || {});
-            if (payload && payload.apiBase) {
-              root.AION_API_BASE = payload.apiBase;
-              for (var fi = 0; fi < root.frames.length; fi++) {
-                try { root.frames[fi].AION_API_BASE = payload.apiBase; } catch(e) {}
-              }
-            }
           }
           var evtName = (name === 'cache') ? 'aion-cache-updated' : 'aion-event-' + name;
           root.dispatchEvent(new CustomEvent(evtName, {detail: payload}));
@@ -266,21 +189,6 @@ final class AionJSBridge {
 
     private func dispatch(_ req: BridgeRequest) async -> Any? {
         switch req.bridge {
-        case "diag":
-            if req.action == "jserror" {
-                let a = req.args
-                let msg = a["msg"] as? String ?? ""
-                let src = a["src"] as? String ?? ""
-                AionLogger.shared.log("js error: \(msg) at \(src)")
-            } else if req.action == "injected" {
-                let base = req.args["base"] as? String ?? ""
-                AionLogger.shared.log("inject ok base=\(base)")
-            } else if req.action == "fetchreq" {
-                let u = req.args["u"] as? String ?? ""
-                AionLogger.shared.log("fetch -> \(u)")
-            }
-            return nil
-
         case "ble":
             return await ToyBLEManager.shared.handle(action: req.action, args: req.args)
 
@@ -350,7 +258,6 @@ final class AionJSBridge {
     func pushCache() {
         guard let webView else { return }
         let cache: [String: Any] = [
-            "apiBase": APIClient.shared.baseURL.absoluteString,
             "deviceId": DeviceIdentity.deviceId,
             "healthAuthorized": AionHealthKit.shared.authorized,
             "healthUploadInfo": AionHealthKit.shared.lastUploadInfo,
