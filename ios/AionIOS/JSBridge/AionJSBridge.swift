@@ -84,6 +84,12 @@ final class AionJSBridge {
         };
       } catch(e3) {}
 
+      // 基址写入页面标题（didFinish 时原生读 title 打日志——不依赖
+      // messageHandler 的注入执行验证，2026-08-25 白屏排查）
+      try {
+        document.title = document.title + ' [aion-base=' + (window.AION_API_BASE || 'EMPTY') + ']';
+      } catch(e4) {}
+
       root.__aionBridgeDispatch = function(name, payload) {
         try {
           if (name === 'cache') {

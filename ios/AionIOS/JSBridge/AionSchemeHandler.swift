@@ -57,21 +57,31 @@ final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
         taskLock.lock()
         activeTasks.insert(taskID)
         taskLock.unlock()
-        URLSession.shared.dataTask(with: req) { [weak self] data, resp, error in
-            guard let self else { return }
-            // stop() 已移除 → 页面已导航走，静默丢弃（绝不打已停止的 task）
-            self.taskLock.lock()
-            let stillActive = self.activeTasks.remove(taskID) != nil
-            self.taskLock.unlock()
-            guard stillActive else { return }
-            if let data, let resp, resp.mimeType != nil || data.count > 0 {
-                self.finish(task: urlSchemeTask, url: url, data: data,
-                            mime: resp.mimeType ?? Self.mime(for: remote.pathExtension), cors: true)
-            } else {
+        // async 版 data(for:)：与 APIClient 探测同款路径（completion 版 dataTask
+        // 在 scheme handler 线程上回调不触发——2026-08-25 白屏实测，兜底请求
+        // 从未到达 CF；探测用的 async 版每次 200）
+        Task {
+            do {
+                let (data, resp) = try await URLSession.shared.data(for: req)
+                self.taskLock.lock()
+                let stillActive = self.activeTasks.remove(taskID) != nil
+                self.taskLock.unlock()
+                guard stillActive else { return }
+                if resp.mimeType != nil || data.count > 0 {
+                    self.finish(task: urlSchemeTask, url: url, data: data,
+                                mime: resp.mimeType ?? Self.mime(for: remote.pathExtension), cors: true)
+                } else {
+                    urlSchemeTask.didFailWithError(NSError(domain: "aionres", code: 3))
+                }
+            } catch {
+                self.taskLock.lock()
+                let stillActive = self.activeTasks.remove(taskID) != nil
+                self.taskLock.unlock()
+                guard stillActive else { return }
                 AionLogger.shared.log("aionres remote fail \(rel): \(String(describing: error))")
-                urlSchemeTask.didFailWithError(error ?? NSError(domain: "aionres", code: 3))
+                urlSchemeTask.didFailWithError(error)
             }
-        }.resume()
+        }
     }
 
     func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {

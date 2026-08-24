@@ -77,6 +77,11 @@ struct AionWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             AionLogger.shared.log("webview didFinish url=\(webView.url?.absoluteString ?? "nil")")
+            webView.evaluateJavaScript("document.title") { result, _ in
+                if let t = result as? String {
+                    AionLogger.shared.log("page title=\(t)")
+                }
+            }
             Task { @MainActor in
                 self.parent.model.failed = false
                 APIClient.shared.markVerified()
