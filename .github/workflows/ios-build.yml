@@ -123,18 +123,25 @@ jobs:
             -archivePath build/AionIOS-signed \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM=2ZSUTQ62K8 \
-            CODE_SIGN_IDENTITY="Apple Development"
+            CODE_SIGN_IDENTITY="Apple Development" \
+            STRIP_INSTALLED_PRODUCT=NO
 
       # 崩溃符号化（2026-08-25 流量闪退排查）：设备 .ips 里 AionIOS 主二进制帧
-      # imageOffset → atos 反查符号。主二进制链接地址 0x100000000，
+      # imageOffset → atos/dwarfdump 反查符号。主二进制链接地址 0x100000000，
       # imageOffset 是相对运行时 image base 的，与链接地址等偏移。
+      # STRIP_INSTALLED_PRODUCT=NO 保证符号不被 strip（排查期专用）。
       - name: Symbolicate crash offsets
         working-directory: ios
         run: |
           BIN="build/AionIOS-signed.xcarchive/dSYMs/AionIOS.app.dSYM/Contents/Resources/DWARF/AionIOS"
           ls -la "$BIN" || echo "NO DSYM"
+          echo "=== atos ==="
           xcrun atos -arch arm64 -o "$BIN" -l 0x100000000 \
             0x100191476 0x100196688 0x100191652 2>&1 || true
+          echo "=== dwarfdump ==="
+          xcrun dwarfdump --arch arm64 --lookup 0x100191476 "$BIN" 2>&1 | head -12 || true
+          xcrun dwarfdump --arch arm64 --lookup 0x100196688 "$BIN" 2>&1 | head -12 || true
+          xcrun dwarfdump --arch arm64 --lookup 0x100191652 "$BIN" 2>&1 | head -12 || true
 
       - name: Package IPA
         working-directory: ios

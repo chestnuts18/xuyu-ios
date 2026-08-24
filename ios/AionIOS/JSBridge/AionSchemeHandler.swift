@@ -10,6 +10,12 @@ final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
 
     private let fileManager = FileManager.default
 
+    /// 进行中的 urlSchemeTask（ObjectIdentifier 集合 + 锁）。
+    /// WebKit 在页面 reload/导航时调用 stop()；之后迟到的远程兜底回调再打
+    /// didReceive/didFinish 会 raise NSException（2026-08-25 流量下闪退嫌疑）。
+    private var activeTasks = Set<ObjectIdentifier>()
+    private let taskLock = NSLock()
+
     private var assetsRoot: URL? {
         Bundle.main.resourceURL?.appendingPathComponent("WebAssets")
     }
@@ -46,7 +52,17 @@ final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
         if let t = APIClient.sharedToken {
             req.setValue(t, forHTTPHeaderField: "X-Aion-Token")
         }
-        URLSession.shared.dataTask(with: req) { data, resp, error in
+        let taskID = ObjectIdentifier(urlSchemeTask)
+        taskLock.lock()
+        activeTasks.insert(taskID)
+        taskLock.unlock()
+        URLSession.shared.dataTask(with: req) { [weak self] data, resp, error in
+            guard let self else { return }
+            // stop() 已移除 → 页面已导航走，静默丢弃（绝不打已停止的 task）
+            self.taskLock.lock()
+            let stillActive = self.activeTasks.remove(taskID) != nil
+            self.taskLock.unlock()
+            guard stillActive else { return }
             if let data, let resp, resp.mimeType != nil || data.count > 0 {
                 self.finish(task: urlSchemeTask, url: url, data: data,
                             mime: resp.mimeType ?? Self.mime(for: remote.pathExtension))
@@ -56,7 +72,11 @@ final class AionSchemeHandler: NSObject, WKURLSchemeHandler {
         }.resume()
     }
 
-    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {}
+    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
+        taskLock.lock()
+        activeTasks.remove(ObjectIdentifier(urlSchemeTask))
+        taskLock.unlock()
+    }
 
     private func finish(task: WKURLSchemeTask, url: URL, data: Data, mime: String) {
         let resp = URLResponse(url: url, mimeType: mime,
