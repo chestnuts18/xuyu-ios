@@ -20,6 +20,51 @@ final class AionJSBridge {
 
     static let injectScript = """
     (function(){
+      // 隧道 token（{{AION_TOKEN}} 占位由原生注入时替换）。CF 候选下 WKWebView 的
+      // fetch/XHR 不发送原生注入的 Cookie（导航会带、fetch 不带——iOS 14+ 平台行为，
+      // credentials 选项不可靠，2026-08-25 实测 /api/* 全 401 实锤）→ 同源请求
+      // 显式补 X-Aion-Token 头：同源自定义头是简单请求、无预检、WebKit 必发。
+      // LAN/TS 下 token 为空不补。⚠️ 必须在 __aionBridgeInstalled 检查之前
+      //（隐藏 iframe 先注入挂标记，主 frame 后注入会跳过——打包期踩过的坑）。
+      var __aionTok = '{{AION_TOKEN}}';
+      try {
+        if (!window.__aionTokPatched) {
+          window.__aionTokPatched = true;
+          var _f0 = window.fetch;
+          window.fetch = function(u, o) {
+            if (__aionTok && (typeof u !== 'string' || u.indexOf('/') === 0)) {
+              o = o || {};
+              try {
+                var hs = new Headers(o.headers || {});
+                if (!hs.has('X-Aion-Token')) hs.set('X-Aion-Token', __aionTok);
+                o.headers = hs;
+              } catch(e) {}
+            }
+            return _f0.call(window, u, o);
+          };
+          var _xo = XMLHttpRequest.prototype.open;
+          XMLHttpRequest.prototype.open = function(m, u) {
+            var r = _xo.apply(this, arguments);
+            if (__aionTok) {
+              try { this.setRequestHeader('X-Aion-Token', __aionTok); } catch(e) {}
+            }
+            return r;
+          };
+          // WS：query 的 token 换成隧道 token（服务器 WS 裁决认 query/header/Cookie 三路，
+          // 页面自带的 LAN token 在隧道上无效）
+          var _WS = window.WebSocket;
+          window.WebSocket = function(u, p) {
+            if (__aionTok && typeof u === 'string') {
+              try {
+                var _u = new URL(u, window.location.href);
+                _u.searchParams.set('token', __aionTok);
+                u = _u.toString();
+              } catch(e) {}
+            }
+            return new _WS(u, p);
+          };
+        }
+      } catch(eTok) {}
       // Aion 页面全同源：桥状态统一挂 top window，跨 frame 共享 pending/缓存/事件。
       // 健康/监管页从聊天 sidebar 打开时是 iframe 子页——若不共享，子页的 promise
       // 永远等不到原生回执（evaluateJavaScript 只打到 main frame）。

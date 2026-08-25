@@ -31,10 +31,12 @@ struct AionWebView: UIViewRepresentable {
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsPictureInPictureMediaPlayback = true
-        // JS 桥：全 frame 注入（健康/定位/监管是聊天页 iframe 子页，也要桥）
+        // JS 桥：全 frame 注入（健康/定位/监管是聊天页 iframe 子页，也要桥）。
+        // {{AION_TOKEN}} 替换为当前候选的隧道 token（CF 下 fetch/XHR 补头用）
         config.userContentController.addUserScript(
             WKUserScript(
-                source: AionJSBridge.injectScript,
+                source: AionJSBridge.injectScript
+                    .replacingOccurrences(of: "{{AION_TOKEN}}", with: APIClient.shared.currentToken ?? ""),
                 injectionTime: .atDocumentStart,
                 forMainFrameOnly: false
             )

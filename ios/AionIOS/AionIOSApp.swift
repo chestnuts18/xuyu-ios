@@ -1,5 +1,6 @@
 import SwiftUI
 import BackgroundTasks
+import WebKit
 
 /// APNs 回调：拿到 device token 后经 PushRegistrar 上报 Aion
 final class AppDelegate: NSObject, UIApplicationDelegate {
@@ -38,9 +39,20 @@ struct AionIOSApp: App {
                 .onAppear {
                     // 网络层：探测家里局域网/出门 Tailscale
                     APIClient.shared.start()
-                    // 基址切换后 WebView 跟随重载
+                    // 基址切换后 WebView 跟随重载。
+                    // 隧道 token 随候选变化（LAN/TS 空、CF 有）→ 重注册注入脚本
+                    // （新 token 替换 {{AION_TOKEN}}）再 load 新基址，否则新页面
+                    // 拿到的还是旧 token，CF 下 fetch/XHR 补不上头（2026-08-25）
                     APIClient.shared.onBaseURLChanged = { url in
                         guard let webView = AionJSBridge.shared.webView else { return }
+                        let controller = webView.configuration.userContentController
+                        controller.removeAllUserScripts()
+                        controller.addUserScript(WKUserScript(
+                            source: AionJSBridge.injectScript
+                                .replacingOccurrences(of: "{{AION_TOKEN}}", with: APIClient.shared.currentToken ?? ""),
+                            injectionTime: .atDocumentStart,
+                            forMainFrameOnly: false
+                        ))
                         webView.load(URLRequest(url: url))
                     }
                     // 后台能力：监管轮询 + 健康上报循环 + 定位心跳（不依赖网页打开）
