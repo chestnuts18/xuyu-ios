@@ -35,8 +35,11 @@ final class AionJSBridge {
             if (__aionTok && (typeof u !== 'string' || u.indexOf('/') === 0)) {
               o = o || {};
               try {
+                // ⚠️ 无条件覆盖：页面自己的 fetch 拦截器在外层先执行，
+                // 会先塞进 LAN token——「已有头就不覆盖」会让它抢先
+                //（2026-08-25 401 实锤）。内层 wrapper 最后定稿隧道 token。
                 var hs = new Headers(o.headers || {});
-                if (!hs.has('X-Aion-Token')) hs.set('X-Aion-Token', __aionTok);
+                hs.set('X-Aion-Token', __aionTok);
                 o.headers = hs;
               } catch(e) {}
             }
