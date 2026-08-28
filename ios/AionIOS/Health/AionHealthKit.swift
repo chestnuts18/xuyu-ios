@@ -12,9 +12,9 @@ final class AionHealthKit: ObservableObject {
     @Published var lastUploadInfo = "尚未上传"
     private var foregroundLoopStarted = false
     private var uploadedUUIDs: Set<String> = []
-    private var uploadedSleepDates: Set<String> = []
+    private var uploadedSleepSignatures: [String: String] = [:]
     private let uuidKey = "health_uploaded_uuids"
-    private let sleepKey = "health_uploaded_sleep_dates"
+    private let sleepKey = "health_uploaded_sleep_signatures"
 
     /// 高频：45 分钟窗口（Watch 同步快）
     private let frequentTypes: [HKQuantityTypeIdentifier] = [
@@ -58,7 +58,7 @@ final class AionHealthKit: ObservableObject {
 
     private init() {
         uploadedUUIDs = Set(UserDefaults.standard.stringArray(forKey: uuidKey) ?? [])
-        uploadedSleepDates = Set(UserDefaults.standard.stringArray(forKey: sleepKey) ?? [])
+        uploadedSleepSignatures = UserDefaults.standard.dictionary(forKey: sleepKey) as? [String: String] ?? [:]
         uploadedWorkoutUUIDs = Set(UserDefaults.standard.stringArray(forKey: workoutUUIDKey) ?? [])
         refreshAuthStatus()
     }
@@ -254,7 +254,6 @@ final class AionHealthKit: ObservableObject {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         for (day, daySamples) in byDay {
-            guard !uploadedSleepDates.contains(day) else { continue }
             var deep: TimeInterval = 0, core: TimeInterval = 0
             var rem: TimeInterval = 0, wake: TimeInterval = 0
             var sleepStart: Date?, sleepEnd: Date?
@@ -278,6 +277,9 @@ final class AionHealthKit: ObservableObject {
             }
             let totalH = (deep + core + rem) / 3600
             guard totalH > 0.1, let sleepStart, let sleepEnd else { continue }
+            // 聚合签名：起止+总时长。与上次一致才跳过——午睡等新段并入后签名变化，覆盖式重发（服务器端按段去重）
+            let signature = "\(formatter.string(from: sleepStart))|\(formatter.string(from: sleepEnd))|\(round(totalH * 10) / 10)"
+            if uploadedSleepSignatures[day] == signature { continue }
             // 字段名对齐 health_monitor.py 睡眠解析（deep/core/rem/wake + sleepStart/sleepEnd）
             let meta: [String: Any] = [
                 "deep": round(deep / 3600 * 10) / 10,
@@ -296,10 +298,11 @@ final class AionHealthKit: ObservableObject {
                 "metadata": meta,
             ]
             if await AionHealthUploader.shared.upload(metrics: [metric]) {
-                uploadedSleepDates.insert(day)
-                let arr = Array(uploadedSleepDates).sorted().suffix(90)
-                uploadedSleepDates = Set(arr)
-                UserDefaults.standard.set(Array(arr), forKey: sleepKey)
+                uploadedSleepSignatures[day] = signature
+                if uploadedSleepSignatures.count > 90 {
+                    uploadedSleepSignatures = Dictionary(uploadedSleepSignatures.sorted { $0.key < $1.key }.suffix(90)) { $1 }
+                }
+                UserDefaults.standard.set(uploadedSleepSignatures, forKey: sleepKey)
                 lastUploadInfo = "刚上传 \(day) 睡眠"
             }
         }
