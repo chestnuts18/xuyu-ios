@@ -4,15 +4,18 @@ import UserNotifications
 
 /// APNs 注册：通知权限 + device token → 上报 Aion（/api/ios-push/register）
 /// 徐聿主动发消息/夜间哨兵告警时，服务器经 APNs 推通知到 iPhone 通知栏。
+/// 2026-08-31 补 UNUserNotificationCenterDelegate：App 前台时也弹横幅（默认只进通知中心，
+/// XuYu 单 Tab 壳前台概率高，不补等于收不到告警）。
 @MainActor
-final class PushRegistrar {
+final class PushRegistrar: NSObject, UNUserNotificationCenterDelegate {
     static let shared = PushRegistrar()
     private var lastToken = ""
 
-    private init() {}
+    private override init() {}
 
-    /// App 启动时调用：请求通知权限 → 注册 APNs
+    /// App 启动时调用：挂代理 + 请求通知权限 → 注册 APNs
     func start() {
+        UNUserNotificationCenter.current().delegate = self
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
             if let error {
                 AionLogger.shared.log("apns auth denied: \(error.localizedDescription)")
@@ -24,6 +27,22 @@ final class PushRegistrar {
                 UIApplication.shared.registerForRemoteNotifications()
             }
         }
+    }
+
+    /// 前台收到通知也弹横幅+声音（默认行为是只静默进通知中心）
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .sound, .list]
+    }
+
+    /// 点按通知横幅：App 已在台时打日志留痕
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        AionLogger.shared.log("apns tapped: \(response.notification.request.identifier)")
     }
 
     /// AppDelegate didRegisterForRemoteNotificationsWithDeviceToken 回调
