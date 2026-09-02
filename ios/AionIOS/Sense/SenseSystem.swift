@@ -49,10 +49,12 @@ final class SenseSystem {
         installPrivateTrack()
     }
 
-    /// App 回到前台：屏幕必然是亮的（公开轨）
+    /// App 回到前台：屏幕必然是亮的，且必然已解锁（打开 App 必经解锁）
     func noteAppActive() {
         screenOn = "on"
         screenOnConf = 0.7
+        lockState = "unlocked"
+        lockConf = 0.9
     }
 
     // MARK: - 公开轨
@@ -128,6 +130,15 @@ final class SenseSystem {
         case .serious: thermal = "serious"
         case .critical: thermal = "critical"
         @unknown default: thermal = "nominal"
+        }
+        // 实时校准 lock（2026-09-02）：翻转轨在 App 挂起时丢 Darwin 通知会漂移。
+        // isProtectedDataAvailable 是绝对真实值——锁定=false、解锁=true；
+        // 锁屏界面亮屏（未解锁）=false，恰好保留「亮屏+锁屏」这一真实状态。
+        let realLock: String = UIApplication.shared.isProtectedDataAvailable ? "unlocked" : "locked"
+        if lockState != realLock {
+            lockState = realLock
+            lockConf = 0.9
+            AionLogger.shared.log("sense lock recalibrated -> \(realLock)")
         }
         return State(
             batteryLevel: level,
