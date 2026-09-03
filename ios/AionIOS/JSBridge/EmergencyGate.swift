@@ -22,10 +22,17 @@ final class EmergencyGate {
     func handle(action: String, args: [String: Any]) -> [String: Any] {
         switch action {
         case "begin":
-            guard phase == "IDLE" || phase == "CANCELLED" else { break }
+            // 进行中（长按/倒计时/待确认）拒绝重入；其余状态（含 COMPLETED 残留）允许重新开始
+            // （2026-09-03 修复：COMPLETED 曾是终态且前端从不调 cancel，成功一次后永久哑火）
+            guard phase != "HOLDING", phase != "WAITING", phase != "READY" else {
+                AionLogger.shared.log("emergencyGate.begin rejected: phase=\(phase)")
+                break
+            }
+            waitTask?.cancel()
             holdStart = Date()
             targetGroupId = args["targetGroupId"] as? String ?? args["groupId"] as? String ?? ""
             set(phase: "HOLDING", heldMs: 0, remainingDelayMs: 0, error: "")
+            AionLogger.shared.log("emergencyGate.begin targetGroup=\(targetGroupId)")
 
         case "hold":
             let holding = args["holding"] as? Bool ?? true
@@ -33,6 +40,7 @@ final class EmergencyGate {
                 // 松手：不足 8 秒取消；已到 REASON_REQUIRED 保持
                 if phase == "HOLDING" {
                     set(phase: "IDLE", heldMs: 0, remainingDelayMs: 0, error: "")
+                    AionLogger.shared.log("emergencyGate.hold released early -> IDLE")
                 }
                 break
             }
@@ -40,6 +48,7 @@ final class EmergencyGate {
             let held = holdStart.map { Date().timeIntervalSince($0) * 1000 } ?? 0
             if held >= Self.holdRequiredMs {
                 set(phase: "REASON_REQUIRED", heldMs: Self.holdRequiredMs, remainingDelayMs: 0, error: "")
+                AionLogger.shared.log("emergencyGate.hold -> REASON_REQUIRED")
             } else {
                 set(phase: "HOLDING", heldMs: held, remainingDelayMs: 0, error: "")
             }
@@ -48,6 +57,7 @@ final class EmergencyGate {
             guard phase == "REASON_REQUIRED" else { break }
             set(phase: "WAITING", heldMs: Self.holdRequiredMs, remainingDelayMs: Self.waitMs, error: "")
             startWaitTicker()
+            AionLogger.shared.log("emergencyGate.reason -> WAITING")
 
         case "status":
             break  // 页面读缓存；WAITING 倒计时由 ticker 推
@@ -57,10 +67,13 @@ final class EmergencyGate {
             waitTask?.cancel()
             performUnlock()
             set(phase: "COMPLETED", heldMs: Self.holdRequiredMs, remainingDelayMs: 0, error: "")
+            scheduleIdleReset()
+            AionLogger.shared.log("emergencyGate.confirm -> COMPLETED (unlock executed)")
 
         case "cancel":
             waitTask?.cancel()
             set(phase: "IDLE", heldMs: 0, remainingDelayMs: 0, error: "")
+            AionLogger.shared.log("emergencyGate.cancel -> IDLE")
 
         default:
             break
@@ -90,6 +103,19 @@ final class EmergencyGate {
             guard let self, self.phase == "WAITING" else { return }
             self.set(phase: "READY", heldMs: Self.holdRequiredMs, remainingDelayMs: 0, error: "")
             AionJSBridge.shared.pushCache()
+        }
+    }
+
+    /// COMPLETED 展示 5 秒（给页面渲染「已解除」文案）后自动回 IDLE，供下次使用
+    /// （2026-09-03 修复：COMPLETED 曾是终态，成功一次后 gate 永久哑火）
+    private func scheduleIdleReset() {
+        waitTask?.cancel()
+        waitTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard let self, self.phase == "COMPLETED" else { return }
+            self.set(phase: "IDLE", heldMs: 0, remainingDelayMs: 0, error: "")
+            AionJSBridge.shared.pushCache()
+            AionLogger.shared.log("emergencyGate auto-reset COMPLETED -> IDLE")
         }
     }
 
