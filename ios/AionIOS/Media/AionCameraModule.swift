@@ -278,13 +278,14 @@ extension AionCameraModule: AVCaptureVideoDataOutputSampleBufferDelegate {
     }
 
     /// 像素缓冲 → 转正 → JPEG base64（无 data: 前缀，对齐网页契约）
-    /// 前置传感器输出「镜像的横帧」：.leftMirrored 转正+去镜像，网页侧 scaleX(-1) 还原自拍预览；
-    /// 后置 .right 转正。方向烘焙进 JPEG（2026-09-07 前置画面翻转修复）
+    /// 前置传感器输出「镜像的 landscape-right 帧」：.rightMirrored 转正+去镜像（2026-09-07
+    /// 实测 .leftMirrored 画面侧躺），网页侧 scaleX(-1) 还原自拍预览；
+    /// 后置 .right 转正。方向烘焙进 JPEG。
     nonisolated static func encodeJPEG(_ pixelBuffer: CVPixelBuffer, facing: String) -> String? {
         let ci = CIImage(cvPixelBuffer: pixelBuffer)
         let context = CIContext()
         guard let cg = context.createCGImage(ci, from: ci.extent) else { return nil }
-        let orientation: UIImage.Orientation = facing == "user" ? .leftMirrored : .right
+        let orientation: UIImage.Orientation = facing == "user" ? .rightMirrored : .right
         let image = UIImage(cgImage: cg, scale: 1, orientation: orientation)
         guard let data = image.jpegData(compressionQuality: 0.7) else { return nil }
         return data.base64EncodedString()
