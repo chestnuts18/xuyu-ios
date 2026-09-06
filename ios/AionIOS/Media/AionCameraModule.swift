@@ -11,8 +11,19 @@ final class CameraSharedState: @unchecked Sendable {
     private var _rotatedW = 0
     private var _rotatedH = 0
     private var _lastEncodeAt: Double = 0
+    private var _facing = "user"
     private var consumers: [Int: (CVPixelBuffer, CMTime) -> Void] = [:]
     private var nextConsumerId = 0
+
+    func storeFacing(_ f: String) {
+        lock.lock(); defer { lock.unlock() }
+        _facing = f
+    }
+
+    var facing: String {
+        lock.lock(); defer { lock.unlock() }
+        return _facing
+    }
 
     /// 15fps 节流判定 + 当前帧消费者快照（一次加锁取齐）
     func snapshotForEncode() -> (shouldEncode: Bool, consumers: [(CVPixelBuffer, CMTime) -> Void]) {
@@ -145,6 +156,7 @@ final class AionCameraModule: NSObject {
     }
 
     /// 同步拍照：阻塞主线程等拍照完成（一次性动作，对齐安卓 sync 语义）
+    /// 超时/空结果兜底到最新预览帧——拍照永不空手而归（2026-09-07 念宝实测拍照失败）
     func captureSync() -> String {
         guard running else { return "" }
         let sem = DispatchSemaphore(value: 0)
@@ -156,8 +168,17 @@ final class AionCameraModule: NSObject {
         }
         pendingPhotoDelegate = delegate  // 强持有到回调完成
         photoOutput.capturePhoto(with: settings, delegate: delegate)
-        _ = sem.wait(timeout: .now() + 2.5)
+        if sem.wait(timeout: .now() + 5) == .timedOut {
+            pendingPhotoDelegate = nil
+            AionLogger.shared.log("photo capture timed out, fallback to preview frame")
+            return state.frame.b64
+        }
         pendingPhotoDelegate = nil
+        if result.isEmpty {
+            AionLogger.shared.log("photo capture empty, fallback to preview frame")
+            return state.frame.b64
+        }
+        AionLogger.shared.log("photo capture ok bytes=\(result.count)")
         return result
     }
 
@@ -174,7 +195,7 @@ final class AionCameraModule: NSObject {
         }
         if running { session.stopRunning() }
         session.beginConfiguration()
-        session.sessionPreset = .medium  // 480p：预览帧省带宽，够用
+        session.sessionPreset = .high  // 720p：预览/拍照画质（2026-09-07 念宝嫌糊，480p→720p）
         for input in session.inputs { session.removeInput(input) }
         guard let device = currentDevice() else {
             session.commitConfiguration()
@@ -196,6 +217,7 @@ final class AionCameraModule: NSObject {
         }
         session.commitConfiguration()
         facing = facingIn
+        state.storeFacing(facingIn)
         if let conn = videoOutput.connection(with: .video) {
             // App 竖屏锁定，帧转正（videoRotationAngle 是 iOS 17+ API，16 用旧接口）
             if #available(iOS 17.0, *) {
@@ -236,7 +258,8 @@ extension AionCameraModule: AVCaptureVideoDataOutputSampleBufferDelegate {
             consumer(pixelBuffer, pts)
         }
         guard snap.shouldEncode else { return }
-        guard let b64 = Self.encodeJPEG(pixelBuffer) else { return }
+        let facing = AionCameraModule.sharedStateFacing()
+        guard let b64 = Self.encodeJPEG(pixelBuffer, facing: facing) else { return }
         let w = CVPixelBufferGetWidth(pixelBuffer)
         let h = CVPixelBufferGetHeight(pixelBuffer)
         AionCameraModule.sharedStateStoreFrame(b64: b64, rotatedW: h, rotatedH: w)
@@ -250,17 +273,20 @@ extension AionCameraModule: AVCaptureVideoDataOutputSampleBufferDelegate {
         CameraSharedStateHolder.shared.state.storeFrame(b64: b64, rotatedW: rotatedW, rotatedH: rotatedH)
     }
 
-    /// 像素缓冲 → 竖转 90° → JPEG base64（无 data: 前缀，对齐网页契约）
-    nonisolated static func encodeJPEG(_ pixelBuffer: CVPixelBuffer) -> String? {
+    nonisolated static func sharedStateFacing() -> String {
+        CameraSharedStateHolder.shared.state.facing
+    }
+
+    /// 像素缓冲 → 转正 → JPEG base64（无 data: 前缀，对齐网页契约）
+    /// 前置传感器输出「镜像的横帧」：.leftMirrored 转正+去镜像，网页侧 scaleX(-1) 还原自拍预览；
+    /// 后置 .right 转正。方向烘焙进 JPEG（2026-09-07 前置画面翻转修复）
+    nonisolated static func encodeJPEG(_ pixelBuffer: CVPixelBuffer, facing: String) -> String? {
         let ci = CIImage(cvPixelBuffer: pixelBuffer)
         let context = CIContext()
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        let rotated = ci.oriented(.right)  // 竖转
-        let extent = CGRect(x: 0, y: 0, width: height, height: width)
-        guard let cg = context.createCGImage(rotated, from: extent) else { return nil }
-        let image = UIImage(cgImage: cg)
-        guard let data = image.jpegData(compressionQuality: 0.55) else { return nil }
+        guard let cg = context.createCGImage(ci, from: ci.extent) else { return nil }
+        let orientation: UIImage.Orientation = facing == "user" ? .leftMirrored : .right
+        let image = UIImage(cgImage: cg, scale: 1, orientation: orientation)
+        guard let data = image.jpegData(compressionQuality: 0.7) else { return nil }
         return data.base64EncodedString()
     }
 }
