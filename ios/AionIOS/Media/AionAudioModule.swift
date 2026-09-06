@@ -33,9 +33,15 @@ final class AionAudioModule {
 
     func start() async -> Bool {
         let auth = AVCaptureDevice.authorizationStatus(for: .audio)
-        if auth == .denied || auth == .restricted { return false }
+        if auth == .denied || auth == .restricted {
+            AionLogger.shared.log("audio start rejected: permission status=\(auth.rawValue)")
+            return false
+        }
         if auth == .notDetermined {
-            guard await AVCaptureDevice.requestAccess(for: .audio) else { return false }
+            guard await AVCaptureDevice.requestAccess(for: .audio) else {
+                AionLogger.shared.log("audio start rejected: user denied prompt")
+                return false
+            }
         }
         // 麦克风需要 playAndRecord 会话；蓝牙耳机兼容
         try? AVAudioSession.sharedInstance().setCategory(

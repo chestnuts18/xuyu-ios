@@ -91,9 +91,15 @@ final class AionCameraModule: NSObject {
 
     func start(_ facingIn: String) async -> Bool {
         let auth = AVCaptureDevice.authorizationStatus(for: .video)
-        if auth == .denied || auth == .restricted { return false }
+        if auth == .denied || auth == .restricted {
+            AionLogger.shared.log("camera start rejected: permission status=\(auth.rawValue)")
+            return false
+        }
         if auth == .notDetermined {
-            guard await AVCaptureDevice.requestAccess(for: .video) else { return false }
+            guard await AVCaptureDevice.requestAccess(for: .video) else {
+                AionLogger.shared.log("camera start rejected: user denied prompt")
+                return false
+            }
         }
         do {
             try configure(facingIn: facingIn)

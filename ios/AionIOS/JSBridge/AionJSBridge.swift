@@ -225,10 +225,21 @@ final class AionJSBridge {
     private func resolve(id: Int, result: Any?) async {
         guard let webView else { return }
         var js: String
-        if let result, JSONSerialization.isValidJSONObject(result),
-           let data = try? JSONSerialization.data(withJSONObject: result),
-           let json = String(data: data, encoding: .utf8) {
-            js = "window.__aionResolve(\(id), \(json))"
+        if let result {
+            // Swift Bool/数字不是 JSONSerialization 认可的对象（isValidJSONObject 返回 false），
+            // 之前 start()/stop() 等布尔返回全走 else 分支 → 网页拿到 undefined（2026-09-07
+            // 「相机/麦克风有允许还失败」根因）。Bool 用插值直接出 true/false 字面量。
+            if let b = result as? Bool {
+                js = "window.__aionResolve(\(id), \(b))"
+            } else if let n = result as? NSNumber {
+                js = "window.__aionResolve(\(id), \(n))"
+            } else if JSONSerialization.isValidJSONObject(result),
+                      let data = try? JSONSerialization.data(withJSONObject: result),
+                      let json = String(data: data, encoding: .utf8) {
+                js = "window.__aionResolve(\(id), \(json))"
+            } else {
+                js = "window.__aionResolve(\(id), undefined)"
+            }
         } else {
             js = "window.__aionResolve(\(id), undefined)"
         }
