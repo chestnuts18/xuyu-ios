@@ -300,7 +300,8 @@ extension AionPhoneCameraModule: AVCaptureVideoDataOutputSampleBufferDelegate {
             let now = CACurrentMediaTime()
             guard shared.previewOn, now - shared.lastPreviewPushAt >= 1.2 else { return }
             shared.lastPreviewPushAt = now
-            guard let b64 = AionCameraModule.encodeJPEG(pixelBuffer) else { return }
+            guard let b64 = AionCameraModule.encodeJPEG(
+                pixelBuffer, facing: shared.facing == "front" ? "user" : "environment") else { return }
             AionJSBridge.shared.pushCachePartial(["phonePreviewFrame": b64])
         }
     }
