@@ -81,7 +81,15 @@ final class APIClient: ObservableObject {
     }
 
     /// 任一请求成功后调用：固化当前基址、刷新验证时钟
-    func markVerified() { lastVerifiedAt = Date() }
+    func markVerified() {
+        lastVerifiedAt = Date()
+        // 2026-09-17 自愈：挂在非最优候选（如 CF）时，请求成功不再代表选路正确——
+        // 让后续成功请求成为重探契机（probeIfNeeded 内 30s 节流），TS 一恢复就切回。
+        // 否则 lastVerifiedAt 被持续刷新，verify 窗口永不到期，会一直焊死在 CF 上。
+        if let best = orderedCandidatesForCurrentPath().first, best.url != baseURL {
+            probeIfNeeded(bypassVerifyWindow: true)
+        }
+    }
 
     /// 请求失败时调用：触发一次探测（30 秒节流保护）
     func noteFailure() { probeIfNeeded(bypassVerifyWindow: true) }
@@ -131,8 +139,14 @@ final class APIClient: ObservableObject {
                     return out
                 }
                 if Task.isCancelled { return }
-                if let hit = results.first(where: { $0.1 }) {
-                    self.adopt(hit.0)
+                // 2026-09-17：并行探测只为省时间，采纳必须按候选优先级（LAN → TS → CF）。
+                // 原实现取 results.first(where:){...}，而 TaskGroup 是按完成顺序吐结果的，
+                // 等于「谁先响应谁赢」——CF 边缘握手常快过 TS 打洞，出门时会抢走 Tailscale 的位
+                // （挂 CF 后传图绕 LAX 边缘，慢；大文件还曾在 nginx 撞 1m 子请求上限 500）。
+                let okURLs = Set(results.filter { $0.1 }.map { $0.0.url })
+                if let hit = ordered.first(where: { okURLs.contains($0.url) }) {
+                    AionLogger.shared.log("apiclient probe ok=[\(okURLs.map { $0.absoluteString }.joined(separator: " "))] adopt=\(hit.url.absoluteString)")
+                    self.adopt(hit)
                 }
             }
         }
