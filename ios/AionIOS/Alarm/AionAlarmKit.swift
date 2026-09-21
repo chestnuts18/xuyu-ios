@@ -45,8 +45,14 @@ final class AionAlarmKit {
     /// 把服务器上的闹铃同步成系统闹钟。
     /// 触发点：App 回前台（含冷启动）、网页桥手动调用。返回同步摘要（回给网页/日志）。
     @discardableResult
-    func sync(reason: String = "manual") async -> [String: Any] {
+    func sync(reason: String = "manual", quiet: Bool = false) async -> [String: Any] {
         var out: [String: Any] = ["supported": true, "reason": reason]
+        // 入口先留痕：同步一旦被调用就必须在服务器日志里留下痕迹，
+        // 「一行都没有」= 根本没跑到这儿（2026-09-22 就是靠这条定位到触发点没接上）。
+        // quiet = 定时补同步（每 90 秒一次），无变化时不刷日志。
+        if !quiet {
+            AionLogger.shared.log("alarm sync(\(reason)) begin authState=\(AlarmManager.shared.authorizationState)")
+        }
 
         // ① 授权：首次会弹系统询问，说明文字来自 Info.plist 的 NSAlarmKitUsageDescription
         if AlarmManager.shared.authorizationState == .notDetermined {
@@ -109,7 +115,9 @@ final class AionAlarmKit {
         out["added"] = added
         out["removed"] = removed
         out["scheduled"] = known.count
-        AionLogger.shared.log("alarm sync(\(reason)) ok server=\(items.count) added=\(added) removed=\(removed) total=\(known.count)")
+        if !quiet || added > 0 || removed > 0 {
+            AionLogger.shared.log("alarm sync(\(reason)) ok server=\(items.count) added=\(added) removed=\(removed) total=\(known.count)")
+        }
         return out
     }
 
@@ -236,4 +244,18 @@ final class AionAlarmKit {
     private func saveScheduled(_ map: [String: [String: Any]]) {
         UserDefaults.standard.set(map, forKey: storeKey)
     }
+}
+
+/// 同步系统闹钟的**唯一入口**（可用性收口）。
+///
+/// 写成自由函数而不是 `AionAlarmKit` 的扩展：类型本身标了 `@available(iOS 26.0, *)`，
+/// 它的扩展也跟着受限，调用点就还得再包一层 `#available`——收在这里最省事。
+/// 低版本系统（iOS 26 以下）直接返回：AlarmKit 是 iOS 26 才有的框架。
+///
+/// ⚠️ **触发点必须走 SwiftUI 的 scenePhase**。2026-09-22 实测：这个 App 是场景化
+/// （UIScene）的 SwiftUI App，`AppDelegate.applicationDidBecomeActive` **压根不会被调用**
+/// —— 当时装完包打开 App，服务器日志里一条 alarm 都没有，白等一轮 CI。
+func syncSystemAlarms(reason: String, quiet: Bool = false) {
+    guard #available(iOS 26.0, *) else { return }
+    Task { await AionAlarmKit.shared.sync(reason: reason, quiet: quiet) }
 }

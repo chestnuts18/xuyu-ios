@@ -17,18 +17,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     ) {
         PushRegistrar.shared.handleTokenFailure(error)
     }
-
-    // ⚠️ 别在这里写 applicationDidBecomeActive 同步闹钟（2026-09-22 踩过）：
-    //    本 App 是场景化（UIScene）的 SwiftUI App，AppDelegate 的这个回调
-    //    **不会被调用** —— 装完包打开 App 毫无反应、服务器日志里一条 alarm 都没有。
-    //    回前台事件一律走下面 body 里的 scenePhase。
 }
 
 @main
 struct AionIOSApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    /// 回前台事件：场景化 App 里只有这个靠得住（见 AppDelegate 里的注释）
-    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         // BGTask 注册：后台兜底轮询（iOS 按系统调度，预期 15 分钟~数小时一次）
@@ -60,12 +53,7 @@ struct AionIOSApp: App {
                             injectionTime: .atDocumentStart,
                             forMainFrameOnly: false
                         ))
-                        // 2026-09-21：换线路时保留当前页面路径（/chat 换完还在 /chat）。
-                        // 旧行为是 load 根地址 = 换一次线就从聊天页踢回图标主界面
-                        //（9/20 晚上 28 分钟被踢 12 次，念宝报的「聊着聊着崩回主界面」）。
-                        let target = APIClient.shared.urlPreservingPath(from: webView.url, base: url)
-                        AionLogger.shared.log("webview routeReload \(target.absoluteString) (from \(webView.url?.absoluteString ?? "nil"))")
-                        webView.load(URLRequest(url: target))
+                        webView.load(URLRequest(url: url))
                     }
                     // 后台能力：监管轮询 + 健康上报循环 + 定位心跳（不依赖网页打开）
                     PushRegistrar.shared.start()
@@ -83,20 +71,7 @@ struct AionIOSApp: App {
                     if LockModel.shared.authorizationStatus != .approved {
                         Task { await LockModel.shared.requestAuthorization() }
                     }
-                    // 启动即同步一次系统闹钟（iOS 26+ 才有实际动作）
-                    syncSystemAlarms(reason: "launch")
-                    // 前台每 90 秒补一次：徐聿在聊天里设闹钟时 App 正在前台、scenePhase
-                    // 压根不变，只靠回前台事件会漏掉（后台时定时器不触发，天然只在
-                    // 合适的时候跑）。无变化时不刷日志。
-                    Timer.scheduledTimer(withTimeInterval: 90, repeats: true) { _ in
-                        syncSystemAlarms(reason: "tick", quiet: true)
-                    }
                     Task { await AionLogger.shared.flush() }
-                }
-                // 回前台再同步（从后台切回来、解锁后回到 App 都会走这里）。
-                // ⚠️ iOS 16 兼容写法（单参数闭包）；iOS 17+ 上这个重载已废弃但仍可用。
-                .onChange(of: scenePhase) { phase in
-                    if phase == .active { syncSystemAlarms(reason: "scene") }
                 }
         }
     }
