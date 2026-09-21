@@ -73,7 +73,9 @@ jobs:
           MOD="$SDK/System/Library/Frameworks/AlarmKit.framework/Modules/AlarmKit.swiftmodule"
           ls -la "$MOD" || { echo "NO AlarmKit swiftmodule"; exit 0; }
           echo "=== AlarmPresentation.Alert ==="
-          grep -n -B2 -A 14 "struct Alert" "$MOD"/*.swiftinterface | head -70
+          grep -n -B2 -A 30 "struct Alert" "$MOD"/*.swiftinterface | head -90
+          echo "=== AlarmPresentation init ==="
+          grep -n -A 6 "public struct AlarmPresentation :" "$MOD"/*.swiftinterface | head -20
           echo "=== AlarmButton ==="
           grep -n -A 10 "struct AlarmButton" "$MOD"/*.swiftinterface | head -30
           echo "=== AlarmConfiguration ==="

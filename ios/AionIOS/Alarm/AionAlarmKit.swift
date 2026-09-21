@@ -75,7 +75,7 @@ final class AionAlarmKit {
         var removed = 0
 
         // ③ 服务器上已经没有的（已触发 / 被徐聿取消）→ 撤销手机里的系统闹钟
-        for (sid, _) in known where !activeIds.contains(sid) {
+        for (sid, info) in known where !activeIds.contains(sid) {
             if let s = info["uuid"] as? String, let u = UUID(uuidString: s) {
                 try? AlarmManager.shared.cancel(id: u)
                 removed += 1
