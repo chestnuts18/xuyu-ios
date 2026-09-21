@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
@@ -58,9 +58,30 @@ jobs:
           retention-days: 30
 
   build-signed:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+
+      # AlarmKit（iOS 26）接口签名核对：Apple 文档对 Alert.title / AlarmButton.text 的
+      # 参数类型写得不全（String / LocalizedStringResource / Text 均可能）。这里把 SDK 里
+      # 的真实声明打出来，编译一旦报错，日志里就有正确答案，省一轮 CI 往返。
+      - name: Inspect AlarmKit SDK interface
+        run: |
+          echo "=== Xcode ==="
+          xcodebuild -version | head -2
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          MOD="$SDK/System/Library/Frameworks/AlarmKit.framework/Modules/AlarmKit.swiftmodule"
+          ls -la "$MOD" || { echo "NO AlarmKit swiftmodule"; exit 0; }
+          echo "=== AlarmPresentation.Alert ==="
+          grep -n -B2 -A 14 "struct Alert" "$MOD"/*.swiftinterface | head -70
+          echo "=== AlarmButton ==="
+          grep -n -A 10 "struct AlarmButton" "$MOD"/*.swiftinterface | head -30
+          echo "=== AlarmConfiguration ==="
+          grep -n -A 12 "static func alarm" "$MOD"/*.swiftinterface | head -50
+          echo "=== AlarmManager schedule/cancel/auth ==="
+          grep -n "func schedule\|func cancel\|authorizationState\|func requestAuthorization" "$MOD"/*.swiftinterface | head -20
+          echo "=== Alarm.Schedule ==="
+          grep -n "static func fixed\|case fixed\|enum Schedule" "$MOD"/*.swiftinterface | head -20
 
       - name: Install XcodeGen
         run: brew install xcodegen

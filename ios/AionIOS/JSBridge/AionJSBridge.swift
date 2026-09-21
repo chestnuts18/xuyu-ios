@@ -91,6 +91,7 @@ final class AionJSBridge {
         w.AionPhoneCamera = r.AionPhoneCamera;
         w.AionStatusBar = r.AionStatusBar;
         w.AionRoute = r.AionRoute;
+        w.AionAlarm = r.AionAlarm;
       }
 
       if (root.__aionBridgeInstalled) { linkFrame(window, root); return; }
@@ -215,6 +216,13 @@ final class AionJSBridge {
         set: function(v){ return root.__aionCall('route','set',{value:v}); }
       };
 
+      // 系统闹钟（AlarmKit，iOS 26+）：网页可手动触发同步 / 查状态
+      root.AionAlarm = {
+        sync: function(){ return root.__aionCall('alarm','sync'); },
+        status: function(){ return root.__aionCall('alarm','status'); },
+        cancelAll: function(){ return root.__aionCall('alarm','cancelAll'); }
+      };
+
       linkFrame(window, root);
     })();
     """
@@ -323,6 +331,20 @@ final class AionJSBridge {
                 // 不动 + 提示原因（2026-09-21：切没开的 TS 会卡 60 秒加载超时）
                 let value = (req.args["value"] as? String) ?? "auto"
                 return await APIClient.shared.requestPreference(RoutePreference(rawValue: value) ?? .auto)
+            default:
+                return nil
+            }
+
+        case "alarm":
+            // AlarmKit 系统闹钟（iOS 26+）。低版本返回 supported=false，网页据此隐藏入口。
+            guard #available(iOS 26.0, *) else { return ["supported": false] }
+            switch req.action {
+            case "sync":
+                return await AionAlarmKit.shared.sync(reason: "bridge")
+            case "status":
+                return AionAlarmKit.shared.status()
+            case "cancelAll":
+                return AionAlarmKit.shared.cancelAll()
             default:
                 return nil
             }

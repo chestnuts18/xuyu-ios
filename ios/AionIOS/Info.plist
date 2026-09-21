@@ -38,6 +38,8 @@
 	<string>Aion 记录你的健康数据</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>连接玩具，密语时刻的遥控由 Aion 帮你代劳</string>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>徐聿给你设的闹铃，需要在手机上响铃——到点会像系统闹钟一样叫醒你，静音和专注模式也挡不住</string>
 	<key>NSMotionUsageDescription</key>
 	<string>让徐聿知道你手机放哪了、在不在动（姿态与运动感知）</string>
 	<key>NSFocusStatusUsageDescription</key>

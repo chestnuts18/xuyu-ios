@@ -17,6 +17,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     ) {
         PushRegistrar.shared.handleTokenFailure(error)
     }
+
+    /// 回前台同步闹钟（iOS 26+）：把服务器上的闹铃登记成**系统闹钟**。
+    /// 放 AppDelegate 而不是 SwiftUI 的 onAppear —— 后者只在首次显示时触发一次，
+    /// 这里每次回前台（解锁、从别的 App 切回来）都会走，才能拿到新设的闹钟。
+    /// 低版本系统直接返回（AlarmKit 是 iOS 26 才有的框架）。
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        // ⚠️ 可用性判断必须写在 Task 闭包**里面**：Task 的闭包是逃逸的，
+        //    外面的 `guard #available` 覆盖不到它（编译报「only available in iOS 26.0 or newer」）
+        Task {
+            guard #available(iOS 26.0, *) else { return }
+            await AionAlarmKit.shared.sync(reason: "foreground")
+        }
+    }
 }
 
 @main
