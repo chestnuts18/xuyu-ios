@@ -90,6 +90,7 @@ final class AionJSBridge {
         w.AionVideo = r.AionVideo;
         w.AionPhoneCamera = r.AionPhoneCamera;
         w.AionStatusBar = r.AionStatusBar;
+        w.AionRoute = r.AionRoute;
       }
 
       if (root.__aionBridgeInstalled) { linkFrame(window, root); return; }
@@ -207,6 +208,13 @@ final class AionJSBridge {
         setBarStyle: function(theme){ return root.__aionCall('statusbar','setBarStyle',{theme:theme}); }
       };
 
+      // 线路选择（2026-09-21，设置页卡片）：自动 / 在家 / Tailscale / 隧道。
+      // get → {preference, base, options}；set(value) → 原生立即切换并重载页面。
+      root.AionRoute = {
+        get: function(){ return root.__aionCall('route','get'); },
+        set: function(v){ return root.__aionCall('route','set',{value:v}); }
+      };
+
       linkFrame(window, root);
     })();
     """
@@ -305,6 +313,23 @@ final class AionJSBridge {
             let theme = (req.args["theme"] as? String) ?? "light"
             StatusBarStyleController.apply(theme)
             return true
+
+        case "route":
+            switch req.action {
+            case "get":
+                return APIClient.shared.routeInfo()
+            case "set":
+                // 先把回执发出去再切换：setPreference 会重载页面，回执晚了就到不了
+                let value = (req.args["value"] as? String) ?? "auto"
+                let info = APIClient.shared.routeInfo()
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    APIClient.shared.setPreference(RoutePreference(rawValue: value) ?? .auto)
+                }
+                return info
+            default:
+                return nil
+            }
 
         default:
             return nil

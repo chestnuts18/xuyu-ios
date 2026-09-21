@@ -16,6 +16,18 @@ final class WebModel: ObservableObject {
         failed = false
         webView?.reload()
     }
+
+    /// 换线路（重试页按钮 / 设置页走桥）：立即生效并重载当前页面
+    func switchRoute(_ pref: RoutePreference) {
+        failed = false
+        if APIClient.preference == pref {
+            // 已经在这条线上：当作「重试」再载一次（用户在重试页点自己当前的线路）
+            let target = APIClient.shared.urlPreservingPath(from: webView?.url, base: APIClient.shared.baseURL)
+            webView?.load(URLRequest(url: target))
+            return
+        }
+        APIClient.shared.setPreference(pref)
+    }
 }
 
 struct AionWebView: UIViewRepresentable {
@@ -101,13 +113,21 @@ struct AionWebView: UIViewRepresentable {
             guard (error as NSError).code != NSURLErrorCancelled else { return }
             AionLogger.shared.log("webview didFailProvisional url=\(webView.url?.absoluteString ?? "nil") err=\((error as NSError).code)")
             Task { @MainActor in
-                // 基址挂了：跳过当前候选，探测下一个（家里 LAN → 出门 TS → CF 自动切换）
+                // 基址挂了：跳过当前候选，探测下一个（家里 LAN → 出门 TS → CF 自动切换）。
+                // 固定线路时 retryAfterFailure 返回 nil（不偷偷换线）→ 显示重试页让用户自己选。
                 if let url = await APIClient.shared.retryAfterFailure() {
-                    webView.load(URLRequest(url: url))
+                    let target = APIClient.shared.urlPreservingPath(from: webView.url, base: url)
+                    webView.load(URLRequest(url: target))
                 } else {
                     self.parent.model.failed = true
                 }
             }
+        }
+
+        /// WebContent 进程被系统回收（长聊天吃内存 OOM）→ 白屏兜底：原地重载
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            AionLogger.shared.log("webview contentProcessTerminated url=\(webView.url?.absoluteString ?? "nil")")
+            webView.reload()
         }
 
         // 网页里的 alert/confirm 弹窗

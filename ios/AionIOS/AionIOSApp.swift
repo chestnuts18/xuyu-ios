@@ -53,7 +53,12 @@ struct AionIOSApp: App {
                             injectionTime: .atDocumentStart,
                             forMainFrameOnly: false
                         ))
-                        webView.load(URLRequest(url: url))
+                        // 2026-09-21：换线路时保留当前页面路径（/chat 换完还在 /chat）。
+                        // 旧行为是 load 根地址 = 换一次线就从聊天页踢回图标主界面
+                        //（9/20 晚上 28 分钟被踢 12 次，念宝报的「聊着聊着崩回主界面」）。
+                        let target = APIClient.shared.urlPreservingPath(from: webView.url, base: url)
+                        AionLogger.shared.log("webview routeReload \(target.absoluteString) (from \(webView.url?.absoluteString ?? "nil"))")
+                        webView.load(URLRequest(url: target))
                     }
                     // 后台能力：监管轮询 + 健康上报循环 + 定位心跳（不依赖网页打开）
                     PushRegistrar.shared.start()
