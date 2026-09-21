@@ -92,6 +92,7 @@ final class AionJSBridge {
         w.AionStatusBar = r.AionStatusBar;
         w.AionRoute = r.AionRoute;
         w.AionAlarm = r.AionAlarm;
+        w.AionSong = r.AionSong;
       }
 
       if (root.__aionBridgeInstalled) { linkFrame(window, root); return; }
@@ -223,6 +224,13 @@ final class AionJSBridge {
         cancelAll: function(){ return root.__aionCall('alarm','cancelAll'); }
       };
 
+      // 原生放歌（2026-09-22）：闹铃到点时把徐聿点的歌直接放出来（锁屏也放得出来）
+      root.AionSong = {
+        play: function(path, title, artist){ return root.__aionCall('song','play',{path:path,title:title,artist:artist}); },
+        stop: function(){ return root.__aionCall('song','stop'); },
+        status: function(){ return root.__aionCall('song','status'); }
+      };
+
       linkFrame(window, root);
     })();
     """
@@ -347,6 +355,25 @@ final class AionJSBridge {
                 return AionAlarmKit.shared.cancelAll()
             default:
                 return nil
+            }
+
+        case "song":
+            // 原生放歌（2026-09-22）：闹铃到点时把徐聿点的歌放出来，锁屏也放得出来
+            switch req.action {
+            case "play":
+                let path = (req.args["path"] as? String) ?? ""
+                guard !path.isEmpty else { return ["ok": false, "error": "path required"] }
+                AionSongPlayer.shared.play(
+                    path: path,
+                    title: req.args["title"] as? String,
+                    artist: req.args["artist"] as? String
+                )
+                return ["ok": true]
+            case "stop":
+                AionSongPlayer.shared.stop()
+                return ["ok": true]
+            default:
+                return AionSongPlayer.shared.status()
             }
 
         default:

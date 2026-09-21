@@ -18,6 +18,28 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         PushRegistrar.shared.handleTokenFailure(error)
     }
 
+    /// 静默推送（2026-09-22）：闹铃到点时服务器把徐聿点的歌直接推过来，
+    /// 这里用**原生播放器**放出去 —— 你睡着/锁屏时网页是冻住的，只有原生放得出来。
+    /// ⚠️ 远程通知回调在场景化 App 里**是会被调用的**（不同于 applicationDidBecomeActive
+    /// 那种激活回调，今晚刚踩过那个坑）。
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        if let song = userInfo["aion_play_song"] as? [String: Any],
+           let path = song["path"] as? String {
+            AionSongPlayer.shared.play(
+                path: path,
+                title: song["title"] as? String,
+                artist: song["artist"] as? String
+            )
+            completionHandler(.newData)
+            return
+        }
+        completionHandler(.noData)
+    }
+
     // ⚠️ 别在这里写 applicationDidBecomeActive 同步闹钟（2026-09-22 踩过）：
     //    本 App 是场景化（UIScene）的 SwiftUI App，AppDelegate 的这个回调
     //    **不会被调用** —— 装完包打开 App 毫无反应、服务器日志里一条 alarm 都没有。
