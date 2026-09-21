@@ -140,25 +140,49 @@ final class APIClient: ObservableObject {
     /// 请求失败时调用：触发一次探测（30 秒节流保护）
     func noteFailure() { probeIfNeeded(bypassVerifyWindow: true) }
 
-    /// 切换线路（设置页 / 重试页调用）：存偏好 + 立即生效
-    func setPreference(_ pref: RoutePreference) {
-        guard Self.preference != pref else { return }
+    /// 切换线路（设置页 / 重试页调用）：**先探路再切**。
+    /// 2026-09-21 念宝实测反馈：切「在家」秒切，切没开的 Tailscale 会卡——
+    /// 那条路 WebView 会干等加载超时（最长 60 秒）。所以先 3 秒探一下：
+    /// 通了才切；不通原地不动 + 回话说明，偏好也不记（免得下次启动还卡）。
+    /// 返回 {ok, preference, message}，网页据此给反馈。
+    func requestPreference(_ pref: RoutePreference) async -> [String: Any] {
+        let previous = Self.preference
+        if pref == .auto {
+            Self.preference = .auto
+            lastProbeAt = .distantPast
+            probeTask?.cancel()
+            let switched = await probeAndAdopt()
+            if !switched {
+                // 没换线路也要重载一次：给设置页按钮一个明确的「切好了」反馈
+                //（旧行为：什么都不做 → 按钮永远停在「正在切换…」）
+                onBaseURLChanged?(baseURL)
+            }
+            return ["ok": true, "preference": RoutePreference.auto.rawValue, "message": ""]
+        }
+        guard let candidate = Self.allCandidates.first(where: { $0.key == pref.rawValue }) else {
+            return ["ok": false, "preference": previous.rawValue, "message": "未知线路"]
+        }
+        let reachable = await probe(candidate)
+        guard reachable else {
+            Self.preference = previous
+            let hint = (pref == .ts) ? "（Tailscale 开没开？）" : ""
+            AionLogger.shared.log("apiclient routeReject \(pref.rawValue) unreachable")
+            return ["ok": false, "preference": previous.rawValue,
+                    "message": "「\(pref.displayName)」现在连不上\(hint)，没切过去"]
+        }
         Self.preference = pref
         lastProbeAt = .distantPast
         probeTask?.cancel()
-        AionLogger.shared.log("apiclient setPreference \(pref.rawValue) base=\(baseURL.absoluteString)")
-        if pref != .auto, let c = Self.allCandidates.first(where: { $0.key == pref.rawValue }) {
-            if c.url == baseURL {
-                // 已在目标线路上：补种 Cookie 后重载一次，让用户看到切生效
-                installTunnelCookie(c) { [weak self] in
-                    Task { @MainActor [weak self] in self?.onBaseURLChanged?(c.url) }
-                }
-            } else {
-                adopt(c)
+        AionLogger.shared.log("apiclient setPreference \(pref.rawValue) reachable=1 base=\(baseURL.absoluteString)")
+        if candidate.url == baseURL {
+            // 已在目标线路上：补种 Cookie 后重载一次，让用户看到切生效
+            installTunnelCookie(candidate) { [weak self] in
+                Task { @MainActor [weak self] in self?.onBaseURLChanged?(candidate.url) }
             }
         } else {
-            probeIfNeeded(bypassVerifyWindow: true)
+            adopt(candidate)
         }
+        return ["ok": true, "preference": pref.rawValue, "message": ""]
     }
 
     /// 给网页设置页读的线路状态
@@ -220,33 +244,37 @@ final class APIClient: ObservableObject {
         lastProbeAt = now
         probeTask?.cancel()
         probeTask = Task { [weak self] in
-            guard let self else { return }
-            let ordered = self.orderedCandidatesForCurrentPath()
-            if !ordered.isEmpty {
-                // 并行探测：总耗时 = 最慢一个候选（3s），蜂窝下不再串行等 LAN 超时
-                let results = await withTaskGroup(
-                    of: (Candidate, Bool).self, returning: [(Candidate, Bool)].self
-                ) { group in
-                    for c in ordered {
-                        group.addTask { (c, await self.probe(c)) }
-                    }
-                    var out: [(Candidate, Bool)] = []
-                    for await r in group { out.append(r) }
-                    return out
-                }
-                if Task.isCancelled { return }
-                // 2026-09-17：并行探测只为省时间，采纳必须按候选优先级（LAN → TS → CF）。
-                // 原实现取 results.first(where:){...}，而 TaskGroup 是按完成顺序吐结果的，
-                // 等于「谁先响应谁赢」——CF 边缘握手常快过 TS 打洞，出门时会抢走 Tailscale 的位
-                // （挂 CF 后传图绕 LAX 边缘，慢；大文件还曾在 nginx 撞 1m 子请求上限 500）。
-                let okURLs = Set(results.filter { $0.1 }.map { $0.0.url })
-                guard let hit = ordered.first(where: { okURLs.contains($0.url) }) else { return }
-                AionLogger.shared.log("apiclient probe ok=[\(okURLs.map { $0.absoluteString }.joined(separator: " "))] hit=\(hit.url.absoluteString) base=\(self.baseURL.absoluteString) pref=\(Self.preference.rawValue)")
-                if hit.url == self.baseURL { return }
-                let currentOK = results.first { $0.0.url == self.baseURL }?.1 ?? false
-                self.adoptIfAllowed(hit, currentOK: currentOK)
-            }
+            await self?.probeAndAdopt()
         }
+    }
+
+    /// 探一轮并按采纳规则决定是否换线；返回「是否真的换了」
+    /// 2026-09-17：并行探测只为省时间，采纳必须按候选优先级（LAN → TS → CF）。
+    /// 原实现取 results.first(where:){...}，而 TaskGroup 是按完成顺序吐结果的，
+    /// 等于「谁先响应谁赢」——CF 边缘握手常快过 TS 打洞，出门时会抢走 Tailscale 的位
+    /// （挂 CF 后传图绕 LAX 边缘，慢；大文件还曾在 nginx 撞 1m 子请求上限 500）。
+    @discardableResult
+    private func probeAndAdopt() async -> Bool {
+        let ordered = orderedCandidatesForCurrentPath()
+        guard !ordered.isEmpty else { return false }
+        // 并行探测：总耗时 = 最慢一个候选（3s），蜂窝下不再串行等 LAN 超时
+        let results = await withTaskGroup(
+            of: (Candidate, Bool).self, returning: [(Candidate, Bool)].self
+        ) { group in
+            for c in ordered {
+                group.addTask { (c, await self.probe(c)) }
+            }
+            var out: [(Candidate, Bool)] = []
+            for await r in group { out.append(r) }
+            return out
+        }
+        if Task.isCancelled { return false }
+        let okURLs = Set(results.filter { $0.1 }.map { $0.0.url })
+        guard let hit = ordered.first(where: { okURLs.contains($0.url) }) else { return false }
+        AionLogger.shared.log("apiclient probe ok=[\(okURLs.map { $0.absoluteString }.joined(separator: " "))] hit=\(hit.url.absoluteString) base=\(baseURL.absoluteString) pref=\(Self.preference.rawValue)")
+        if hit.url == baseURL { return false }
+        let currentOK = results.first { $0.0.url == baseURL }?.1 ?? false
+        return adoptIfAllowed(hit, currentOK: currentOK)
     }
 
     /// 采纳裁决（2026-09-21 念宝拍板，治「聊着聊着被踢回主界面」）：
@@ -255,16 +283,18 @@ final class APIClient: ObservableObject {
     ///    每换一次整页重载一次——9/20 晚上 28 分钟被踢 12 次就是这么来的
     /// ③ 自动例外：探到「在家」通而当前不是在家 → 升回局域网（2 分钟节流）
     /// ④ 当前这条探不通 → 换到优先级最高的可用候选（真断了才换）
-    private func adoptIfAllowed(_ hit: Candidate, currentOK: Bool) {
+    @discardableResult
+    private func adoptIfAllowed(_ hit: Candidate, currentOK: Bool) -> Bool {
         if Self.preference != .auto {
             adopt(hit)
-            return
+            return true
         }
         if currentOK {
             guard hit.key == "lan",
-                  Date().timeIntervalSince(lastSwitchAt) >= Self.lanUpgradeThrottle else { return }
+                  Date().timeIntervalSince(lastSwitchAt) >= Self.lanUpgradeThrottle else { return false }
         }
         adopt(hit)
+        return true
     }
 
     /// 蜂窝网络下跳过局域网候选（流量时 LAN 必不通，省 3 秒串行超时）；

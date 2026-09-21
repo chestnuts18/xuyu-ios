@@ -17,18 +17,16 @@ final class WebModel: ObservableObject {
         webView?.reload()
     }
 
-    /// 换线路（重试页按钮 / 设置页走桥）：立即生效并重载当前页面
+    /// 换线路（重试页按钮 / 设置页走桥）：先探路再切。
+    /// 成功返回 nil（页面会自己重载）；失败返回给用户看的原因。
     /// @MainActor：APIClient 是主隔离类，从 nonisolated 上下文调会被编译器拒
     @MainActor
-    func switchRoute(_ pref: RoutePreference) {
-        failed = false
-        if APIClient.preference == pref {
-            // 已经在这条线上：当作「重试」再载一次（用户在重试页点自己当前的线路）
-            let target = APIClient.shared.urlPreservingPath(from: webView?.url, base: APIClient.shared.baseURL)
-            webView?.load(URLRequest(url: target))
-            return
+    func switchRoute(_ pref: RoutePreference) async -> String? {
+        let result = await APIClient.shared.requestPreference(pref)
+        if (result["ok"] as? Bool) == false {
+            return (result["message"] as? String) ?? "这条线路现在连不上"
         }
-        APIClient.shared.setPreference(pref)
+        return nil
     }
 }
 

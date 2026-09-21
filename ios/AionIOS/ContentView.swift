@@ -9,6 +9,8 @@ struct ContentView: View {
     /// 初始值用 .auto（属性初始化器是 nonisolated 上下文，读 @MainActor 的
     /// APIClient.preference 会被编译器拒），真实值在 onAppear 里同步。
     @State private var routePreference: RoutePreference = .auto
+    @State private var routeBusy = false
+    @State private var routeError: String?
 
     var body: some View {
         ZStack {
@@ -31,8 +33,17 @@ struct ContentView: View {
                     HStack(spacing: 8) {
                         ForEach(RoutePreference.allCases) { pref in
                             Button {
-                                routePreference = pref
-                                webModel.switchRoute(pref)
+                                routeBusy = true
+                                routeError = nil
+                                Task {
+                                    let err = await webModel.switchRoute(pref)
+                                    if let err {
+                                        routeError = err
+                                    } else {
+                                        routePreference = pref
+                                    }
+                                    routeBusy = false
+                                }
                             } label: {
                                 Text(pref.displayName)
                                     .font(.caption)
@@ -46,7 +57,19 @@ struct ContentView: View {
                                     )
                                     .foregroundStyle(routePreference == pref ? Color.white : Color.primary)
                             }
+                            .disabled(routeBusy)
                         }
+                    }
+                    if routeBusy {
+                        Text("正在探路…")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let routeError {
+                        Text(routeError)
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .multilineTextAlignment(.center)
                     }
                 }
                 .padding(24)

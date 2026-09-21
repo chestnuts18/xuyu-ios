@@ -319,14 +319,10 @@ final class AionJSBridge {
             case "get":
                 return APIClient.shared.routeInfo()
             case "set":
-                // 先把回执发出去再切换：setPreference 会重载页面，回执晚了就到不了
+                // 先探路再切（3s），把结果回给网页：通了页面会重载，不通则原地
+                // 不动 + 提示原因（2026-09-21：切没开的 TS 会卡 60 秒加载超时）
                 let value = (req.args["value"] as? String) ?? "auto"
-                let info = APIClient.shared.routeInfo()
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 300_000_000)
-                    APIClient.shared.setPreference(RoutePreference(rawValue: value) ?? .auto)
-                }
-                return info
+                return await APIClient.shared.requestPreference(RoutePreference(rawValue: value) ?? .auto)
             default:
                 return nil
             }
