@@ -18,6 +18,8 @@ final class WebModel: ObservableObject {
     }
 
     /// 换线路（重试页按钮 / 设置页走桥）：立即生效并重载当前页面
+    /// @MainActor：APIClient 是主隔离类，从 nonisolated 上下文调会被编译器拒
+    @MainActor
     func switchRoute(_ pref: RoutePreference) {
         failed = false
         if APIClient.preference == pref {

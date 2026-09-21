@@ -5,8 +5,10 @@ import FamilyControls
 struct ContentView: View {
     @StateObject private var webModel = WebModel()
     @ObservedObject private var pickerModel = AppPickerModel.shared
-    /// 重试页上的线路选择（2026-09-21）：网页打不开时也能扳道岔
-    @State private var routePreference: RoutePreference = APIClient.preference
+    /// 重试页上的线路选择（2026-09-21）：网页打不开时也能扳道岔。
+    /// 初始值用 .auto（属性初始化器是 nonisolated 上下文，读 @MainActor 的
+    /// APIClient.preference 会被编译器拒），真实值在 onAppear 里同步。
+    @State private var routePreference: RoutePreference = .auto
 
     var body: some View {
         ZStack {
