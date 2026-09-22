@@ -47,6 +47,8 @@ final class AionNotifRelay: NSObject {
     private var ancsZeroSince: Date?
     private var lastConnectAt: Date = .distantPast
     private var lastHeartbeatAt: Date = .distantPast
+    /// 板子当前的 bootId（从 payload 的 key `esp-{bootId}-{seq}` 里取）
+    private var currentBootId = ""
     private var lastStatusText = ""
 
     // MARK: - 待上传队列
@@ -170,6 +172,18 @@ final class AionNotifRelay: NSObject {
             ackOnly(seq)
             return
         }
+        // 板子重启检测（2026-09-23 实测踩到）：key = `esp-{bootId}-{seq}`。
+        // 板子一重启，seq 就从 1 重新数，而 App 这头还记着旧的大值 ——
+        // 「maxSeq > lastAcked」永远为假 → ACK 一条都发不出去 → 板子无限重发。
+        if let k = obj["k"] as? String {
+            let boot = k.components(separatedBy: "-").dropLast().joined(separator: "-")
+            if !currentBootId.isEmpty, boot != currentBootId {
+                AionLogger.shared.log("relay board rebooted \(currentBootId)→\(boot) — reset ack")
+                lastAcked = 0
+            }
+            currentBootId = boot
+        }
+
         let item: [String: Any] = [
             "key":      obj["k"] as? String ?? "esp-\(seq)",
             "title":    obj["t"] as? String ?? "",
