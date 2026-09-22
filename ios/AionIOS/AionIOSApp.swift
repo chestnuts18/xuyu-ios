@@ -119,6 +119,10 @@ struct AionIOSApp: App {
                 // ⚠️ iOS 16 兼容写法（单参数闭包）；iOS 17+ 上这个重载已废弃但仍可用。
                 .onChange(of: scenePhase) { phase in
                     if phase == .active { syncSystemAlarms(reason: "scene") }
+                    // 回前台收掉外出监控的画中画小窗（系统不会自己收，见模块内注释）
+                    if phase == .active {
+                        AionPhoneCameraModule.shared.dismissPictureInPictureIfActive()
+                    }
                     // 网页的「App 在前台」标记 —— 监控页的手机预览靠它决定开不开摄像头
                     // （camera.html `_phoneAppForeground`）。安卓 WebViewActivity 一直在发
                     // （onResume/onPause），iOS 此前**从没发过** → 标记恒 false → 预览永远黑的

@@ -21,7 +21,11 @@ final class AionPhoneCameraModule: NSObject {
     private var facing = "back"   // 网页契约：front/back
     private var previewOn = false
     private var lastPreviewPushAt: Double = 0
-    private var pendingPhotoDelegate: PhotoCaptureDelegate?
+    private var pendingPhotoDelegate: PhoneCamPhotoDelegate?
+    private var lastCaptureError = ""
+    /// 最新一帧（拍照失败的兜底来源：多任务相机下 AVCapturePhotoOutput 可能不派发）
+    private var latestFrameBuffer: CVPixelBuffer?
+    private var latestFrameAt: Double = 0
     private var interruptionObservers: [NSObjectProtocol] = []
     private var armedZoom: Double = 1.0
     private var pipController: AVPictureInPictureController?
@@ -159,9 +163,14 @@ final class AionPhoneCameraModule: NSObject {
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
             ]
             videoOutput.setSampleBufferDelegate(self, queue: encodeQueue)
-            if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
-            if session.canAddOutput(photoOutput) { session.addOutput(photoOutput) }
+            let addedVideo = session.canAddOutput(videoOutput)
+            if addedVideo { session.addOutput(videoOutput) }
+            let addedPhoto = session.canAddOutput(photoOutput)
+            if addedPhoto { session.addOutput(photoOutput) }
             session.commitConfiguration()
+            // 拍照失败排查用：canAddOutput 为假 = photoOutput 压根没挂上会话（capturePhoto 会静默不派发）
+            AionLogger.shared.log(
+                "phonecam session outputs video=\(addedVideo ? 1 : 0) photo=\(addedPhoto ? 1 : 0) total=\(session.outputs.count)")
             // 2026-09-22 外出监控 Phase 0：多任务相机访问。
             // iOS 18+ 只要 App 用 iOS 18+ SDK 编译 + 后台模式含 voip，这里就为真 ——
             // 为真才能在切后台/用别的 App 时继续用摄像头。为假说明 voip 没生效，方案 B 不成立。
@@ -266,8 +275,8 @@ final class AionPhoneCameraModule: NSObject {
             await reportFailure(requestId: requestId, error: "camera_unavailable")
             return
         }
-        guard let jpeg = captureSync() else {
-            await reportFailure(requestId: requestId, error: "capture_failed")
+        guard let jpeg = captureStill(facing: facing) else {
+            await reportFailure(requestId: requestId, error: "capture_failed:\(lastCaptureError)")
             return
         }
         await uploadJPEG(requestId: requestId, jpeg: jpeg, facing: facing, zoom: zoom)
@@ -276,19 +285,50 @@ final class AionPhoneCameraModule: NSObject {
     private func captureSync() -> Data? {
         let sem = DispatchSemaphore(value: 0)
         var result: Data?
-        let delegate = PhotoCaptureDelegate { b64 in
-            if !b64.isEmpty, let data = Data(base64Encoded: b64) {
+        var failure = ""
+        let delegate = PhoneCamPhotoDelegate { data, error in
+            if let data {
                 result = Self.fitUploadLimit(data)
+            } else {
+                failure = error
             }
             sem.signal()
         }
         pendingPhotoDelegate = delegate
         photoOutput.capturePhoto(with: AVCapturePhotoSettings(), delegate: delegate)
-        // 2026-09-22：2.5s → 5s（安卓可配到 15s）。会话常开时通常几十毫秒就回，
-        // 这道闸只是失败兜底 —— 弱光/冷启动下 2.5 秒太紧，容易白丢一次请求。
-        _ = sem.wait(timeout: .now() + 5.0)
+        // 2026-09-22：原先 2.5s 且失败静默 —— 改成 4s 并把失败原因带回来。
+        let waited = sem.wait(timeout: .now() + 4.0)
         pendingPhotoDelegate = nil
+        if waited == .timedOut {
+            lastCaptureError = "photo_timeout_4s"
+        } else if result == nil {
+            lastCaptureError = failure.isEmpty ? "photo_failed_unknown" : failure
+        } else {
+            lastCaptureError = ""
+        }
         return result
+    }
+
+    /// 拍一张静态照片。先走 `AVCapturePhotoOutput`（全画质），失败就退到**视频流最近一帧**。
+    /// 2026-09-22 实测：后台/前台 `capturePhoto` 都不派发（4 秒超时 → failure 上报），
+    /// 但同一会话的视频流是活的（画中画里画面在动）—— 所以兜底抓帧一定能拿到画面。
+    private func captureStill(facing: String) -> Data? {
+        if let data = captureSync() { return data }
+        let photoError = lastCaptureError
+        guard let buffer = latestFrameBuffer else {
+            AionLogger.shared.log("phonecam capture failed: \(photoError) (无兜底帧)")
+            return nil
+        }
+        let age = CACurrentMediaTime() - latestFrameAt
+        let legacyFacing = facing == "front" ? "user" : "environment"
+        guard let b64 = AionCameraModule.encodeJPEG(buffer, facing: legacyFacing),
+              let data = Data(base64Encoded: b64) else {
+            AionLogger.shared.log("phonecam capture failed: \(photoError) (兜底帧编码失败)")
+            return nil
+        }
+        AionLogger.shared.log(
+            "phonecam capture via video-frame fallback age=\(String(format: "%.2f", age))s photoError=\(photoError)")
+        return Self.fitUploadLimit(data)
     }
 
     /// 服务器上限 800KB：超限降采样重压（1080p → 720p → 更低质量）
@@ -433,6 +473,13 @@ final class AionPhoneCameraModule: NSObject {
         AionLogger.shared.log("phonecam PiP ready")
     }
 
+    /// 回前台时收掉小窗。系统**不会**自己收 —— 我们的 content source 不是 inline video
+    /// （2026-09-22 念宝实测：切回 App 后小窗还挂着）。收完保留 controller，下次切后台能再自动开。
+    func dismissPictureInPictureIfActive() {
+        guard let controller = pipController, controller.isPictureInPictureActive else { return }
+        controller.stopPictureInPicture()
+    }
+
     private func stopPictureInPicture() {
         if let controller = pipController, controller.isPictureInPictureActive {
             controller.stopPictureInPicture()
@@ -475,6 +522,33 @@ extension AionPhoneCameraModule: AVPictureInPictureControllerDelegate {
     }
 }
 
+/// 拍一张静态照片的委托：**把失败原因带回来**。
+/// （原来复用 AionCameraModule 的 PhotoCaptureDelegate，失败只回空串 —— 2026-09-22 排查
+/// 「命令收到了但照片回不来」时完全看不到错在哪，只能靠服务端那条 failure 上报反推。）
+final class PhoneCamPhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate {
+    private let onDone: (Data?, String) -> Void
+
+    init(onDone: @escaping (Data?, String) -> Void) {
+        self.onDone = onDone
+    }
+
+    func photoOutput(
+        _ output: AVCapturePhotoOutput,
+        didFinishProcessingPhoto photo: AVCapturePhoto,
+        error: Error?
+    ) {
+        if let error {
+            onDone(nil, error.localizedDescription)
+            return
+        }
+        guard let data = photo.fileDataRepresentation() else {
+            onDone(nil, "fileDataRepresentation_nil")
+            return
+        }
+        onDone(data, "")
+    }
+}
+
 /// 画中画宿主：把手机摄像头的实时预览铺满 PiP 窗口。
 final class PhoneCamPipViewController: AVPictureInPictureVideoCallViewController {
     private let previewLayer: AVCaptureVideoPreviewLayer
@@ -510,6 +584,11 @@ extension AionPhoneCameraModule: AVCaptureVideoDataOutputSampleBufferDelegate {
         Task { @MainActor in
             let shared = AionPhoneCameraModule.shared
             let now = CACurrentMediaTime()
+            // 最新帧缓存：arm 期间每帧都留一份，拍照失败时靠它兜底
+            if shared.armed {
+                shared.latestFrameBuffer = pixelBuffer
+                shared.latestFrameAt = now
+            }
             guard shared.previewOn, now - shared.lastPreviewPushAt >= 1.2 else { return }
             shared.lastPreviewPushAt = now
             guard let b64 = AionCameraModule.encodeJPEG(
