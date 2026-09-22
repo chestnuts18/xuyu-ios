@@ -423,6 +423,16 @@ final class AionJSBridge {
         )
     }
 
+    /// 同上，但参数是**真正的布尔字面量**。
+    /// ⚠️ callWebFunction 会把任何参数包成字符串，而 JS 里 `!!'false'` 恒为 true ——
+    /// 布尔语义（onAionAppForegroundChanged）必须走这条，否则「切到后台」会被网页当成「在前台」。
+    func callWebFunctionBool(_ fn: String, _ value: Bool) {
+        guard let webView else { return }
+        webView.evaluateJavaScript(
+            "window.\(fn) && window.\(fn)(\(value ? "true" : "false"))"
+        )
+    }
+
     /// 部分键更新同步缓存（摄像头状态/查岗预览帧等高频小推）
     func pushCachePartial(_ dict: [String: Any]) {
         guard let webView,

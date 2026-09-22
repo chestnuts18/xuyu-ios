@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import AVKit
 import UIKit
 
 /// 远程查岗拍照（对齐安卓 AionPhoneCamera 契约）——iOS 降级版：
@@ -22,6 +23,10 @@ final class AionPhoneCameraModule: NSObject {
     private var lastPreviewPushAt: Double = 0
     private var pendingPhotoDelegate: PhotoCaptureDelegate?
     private var interruptionObservers: [NSObjectProtocol] = []
+    private var armedZoom: Double = 1.0
+    private var pipController: AVPictureInPictureController?
+    private var pipCallViewController: PhoneCamPipViewController?
+    private var pipHostView: UIView?
 
     override private init() {
         super.init()
@@ -63,11 +68,14 @@ final class AionPhoneCameraModule: NSObject {
         }
         self.facing = (facing == "front") ? "front" : "back"
         armed = true
+        armedZoom = zoom
         UserDefaults.standard.set(true, forKey: "phonecam.armed")
         AionJSBridge.shared.pushCachePartial(["phoneCamCaps": capabilitiesJSON()])
-        // 2026-09-22 外出监控 Phase 0：arm 时就把会话点着并常开。
+        // 2026-09-22 外出监控：arm 时就把会话点着并常开。
         // iOS 只允许前台 startRunning()，出门之后没机会再开 —— 不在这儿点着，后台必拍不到。
         let warm = await startSession()
+        setupPictureInPictureIfNeeded()
+        await reportArmStateToServer(true)
         AionLogger.shared.log("phonecam armed facing=\(self.facing) sessionWarm=\(warm)")
         return true
     }
@@ -76,7 +84,40 @@ final class AionPhoneCameraModule: NSObject {
         armed = false
         UserDefaults.standard.set(false, forKey: "phonecam.armed")
         stopPreview()   // armed 已置 false → 这里会真正 stopRunning()
+        stopPictureInPicture()
+        Task { await reportArmStateToServer(false) }
         AionLogger.shared.log("phonecam disarmed")
+    }
+
+    /// 对齐安卓 `AionPushService.postPhoneCameraArmState`：arm/disarm **必须上报服务器**。
+    /// iOS 此前从不上报 → 服务端 `phone_camera._armed` 恒 false → request_capture 直接抛
+    /// 「phone camera is not armed」，压根不会下发拍照请求（2026-09-22 查实）。
+    private func reportArmStateToServer(_ isArmed: Bool) async {
+        let path = isArmed ? "/api/phone-camera/arm" : "/api/phone-camera/disarm"
+        var request = URLRequest(url: APIClient.shared.url(for: path))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = APIClient.shared.currentToken {
+            request.setValue(token, forHTTPHeaderField: "X-Aion-Token")
+        }
+        request.timeoutInterval = 10
+        var body: [String: Any] = ["client_id": DeviceIdentity.deviceId]
+        if isArmed {
+            body["facing"] = facing
+            body["zoom"] = armedZoom
+            if let data = capabilitiesJSON().data(using: .utf8),
+               let caps = try? JSONSerialization.jsonObject(with: data) {
+                body["capabilities"] = caps
+            }
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            AionLogger.shared.log("phonecam arm-report armed=\(isArmed) http=\(code)")
+        } catch {
+            AionLogger.shared.log("phonecam arm-report failed: \(error.localizedDescription)")
+        }
     }
 
     func requestPreview(facing: String, zoom: Double) async -> Bool {
@@ -346,6 +387,105 @@ final class AionPhoneCameraModule: NSObject {
         case .videoDeviceNotAvailableDueToSystemPressure: return "系统压力"
         @unknown default: return "未知"
         }
+    }
+
+    // MARK: - 画中画（外出监控：苹果要 App 挂窗，才允许离开前台后继续用摄像头）
+    //
+    // 实测（2026-09-22）：只打开 isMultitaskingCameraAccessEnabled（supported=1 enabled=1）
+    // 切后台照样被掐 —— 日志 `INTERRUPTED reason=1(后台不可用)`。苹果要的是「像视频通话那样
+    // 在屏幕上留一个画中画窗口」。窗口本身藏不掉（系统级），窗里放什么由我们决定：
+    // 这里放实时预览，念宝随时看得见他能看到什么（同「拍照前先响一声」的不偷拍设计）。
+
+    private func setupPictureInPictureIfNeeded() {
+        guard pipController == nil else { return }
+        guard AVPictureInPictureController.isPictureInPictureSupported() else {
+            AionLogger.shared.log("phonecam PiP unsupported on device")
+            return
+        }
+        guard let window = Self.activeWindow() else {
+            AionLogger.shared.log("phonecam PiP deferred: no key window")
+            return
+        }
+        let host = UIView(frame: CGRect(x: 0, y: 0, width: 2, height: 2))
+        host.backgroundColor = .clear
+        host.isUserInteractionEnabled = false
+        window.addSubview(host)
+        let callViewController = PhoneCamPipViewController(session: session)
+        let source = AVPictureInPictureController.ContentSource(
+            activeVideoCallSourceView: host,
+            contentViewController: callViewController
+        )
+        let controller = AVPictureInPictureController(contentSource: source)
+        controller.canStartPictureInPictureAutomaticallyFromInline = true
+        controller.delegate = self
+        pipHostView = host
+        pipCallViewController = callViewController
+        pipController = controller
+        AionLogger.shared.log("phonecam PiP ready")
+    }
+
+    private func stopPictureInPicture() {
+        if let controller = pipController, controller.isPictureInPictureActive {
+            controller.stopPictureInPicture()
+        }
+        pipController = nil
+        pipCallViewController = nil
+        pipHostView?.removeFromSuperview()
+        pipHostView = nil
+    }
+
+    private static func activeWindow() -> UIWindow? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+    }
+}
+
+// PiP 事件只用来写日志。⚠️ 这里**故意不写 nonisolated**：本类整体 @MainActor，
+// 若 AVPictureInPictureControllerDelegate 在 SDK 里也标了 @MainActor，nonisolated 会直接
+// 编译报错；不标则两种情况下都能过（最坏是 Swift 6 严格模式下的警告）。
+extension AionPhoneCameraModule: AVPictureInPictureControllerDelegate {
+    func pictureInPictureControllerDidStartPictureInPicture(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) {
+        AionLogger.shared.log("phonecam PiP STARTED")
+    }
+
+    func pictureInPictureControllerDidStopPictureInPicture(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) {
+        AionLogger.shared.log("phonecam PiP stopped")
+    }
+
+    func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        failedToStartPictureInPictureWithError error: Error
+    ) {
+        AionLogger.shared.log("phonecam PiP failed: \(error.localizedDescription)")
+    }
+}
+
+/// 画中画宿主：把手机摄像头的实时预览铺满 PiP 窗口。
+final class PhoneCamPipViewController: AVPictureInPictureVideoCallViewController {
+    private let previewLayer: AVCaptureVideoPreviewLayer
+
+    init(session: AVCaptureSession) {
+        previewLayer = AVCaptureVideoPreviewLayer(session: session)
+        super.init(nibName: nil, bundle: nil)
+        previewLayer.videoGravity = .resizeAspectFill
+        view.layer.addSublayer(previewLayer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("PhoneCamPipViewController is code-only") }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)   // 别让窗口改变大小时糊一帧动画
+        previewLayer.frame = view.bounds
+        CATransaction.commit()
     }
 }
 
