@@ -312,25 +312,29 @@ final class AionPhoneCameraModule: NSObject {
         return result
     }
 
-    /// 拍一张静态照片。先走 `AVCapturePhotoOutput`（全画质），失败就退到**视频流最近一帧**。
-    /// 2026-09-22 实测：后台/前台 `capturePhoto` 都不派发（4 秒超时 → failure 上报），
-    /// 但同一会话的视频流是活的（画中画里画面在动）—— 所以兜底抓帧一定能拿到画面。
+    /// 拍一张静态照片 —— **只取视频流最近一帧**。
+    ///
+    /// 2026-09-22 念宝拍板：不要快门声。
+    /// `AVCapturePhotoOutput.capturePhoto` 每次都会响系统快门音（公开 API 关不掉），
+    /// 而实测它**在后台根本不派发**（每次 4 秒超时 `photoError=photo_timeout_4s`）——
+    /// 等于白等 4 秒 + 白响一声。真正出图的本来就是视频流兜底那条（静音、即时）。
+    /// 所以干脆去掉快门路：静音 + 少等 4 秒。
+    /// 代价：画质 = 视频帧（`.medium` 预设）而非全分辨率照片 —— 实测认得清桌上瓶子的字。
     private func captureStill(facing: String) -> Data? {
-        if let data = captureSync() { return data }
-        let photoError = lastCaptureError
         guard let buffer = latestFrameBuffer else {
-            AionLogger.shared.log("phonecam capture failed: \(photoError) (无兜底帧)")
+            lastCaptureError = "no_video_frame"
+            AionLogger.shared.log("phonecam capture failed: 还没有可用视频帧（会话刚起？）")
             return nil
         }
         let age = CACurrentMediaTime() - latestFrameAt
         let legacyFacing = facing == "front" ? "user" : "environment"
         guard let b64 = AionCameraModule.encodeJPEG(buffer, facing: legacyFacing),
               let data = Data(base64Encoded: b64) else {
-            AionLogger.shared.log("phonecam capture failed: \(photoError) (兜底帧编码失败)")
+            lastCaptureError = "video_frame_encode_failed"
+            AionLogger.shared.log("phonecam capture failed: 视频帧编码失败")
             return nil
         }
-        AionLogger.shared.log(
-            "phonecam capture via video-frame fallback age=\(String(format: "%.2f", age))s photoError=\(photoError)")
+        AionLogger.shared.log("phonecam capture via video frame age=\(String(format: "%.2f", age))s")
         return Self.fitUploadLimit(data)
     }
 
