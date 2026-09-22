@@ -45,6 +45,7 @@ final class AionNotifRelay: NSObject {
     private var newestSeq: UInt32 = 0
     private var ancsReady = false
     private var ancsZeroSince: Date?
+    private var lastConnectAt: Date = .distantPast
     private var lastHeartbeatAt: Date = .distantPast
     private var lastStatusText = ""
 
@@ -89,7 +90,7 @@ final class AionNotifRelay: NSObject {
 
         // 2) 系统已经把板子连着了（ANCS 那条）→ 依附上去，不抢
         if let p = central.retrieveConnectedPeripherals(withServices: [Self.svcUUID]).first {
-            adopt(p, initiated: false, alreadyConnected: true)
+            adopt(p, initiated: false)
             return
         }
 
@@ -98,7 +99,7 @@ final class AionNotifRelay: NSObject {
            let idStr = UserDefaults.standard.string(forKey: Self.periphIDKey),
            let uuid = UUID(uuidString: idStr),
            let p = central.retrievePeripherals(withIdentifiers: [uuid]).first {
-            adopt(p, initiated: true, alreadyConnected: false)
+            adopt(p, initiated: true)
             return
         }
 
@@ -110,7 +111,11 @@ final class AionNotifRelay: NSObject {
         }
     }
 
-    private func adopt(_ p: CBPeripheral, initiated: Bool, alreadyConnected: Bool) {
+    /// ⚠️ 无论系统是否已经连着板子，都必须**显式 connect()**：
+    /// retrieveConnectedPeripherals 返回的设备在 App 侧 state 仍是 disconnected，
+    /// 不 connect 就永远等不到服务发现（2026-09-23 实测踩到，relay 干等到超时）。
+    /// connect() 只是给同一条物理链路加引用计数，**不会抢系统的 ANCS 连接**。
+    private func adopt(_ p: CBPeripheral, initiated: Bool) {
         if peripheral !== p || ctrlChar == nil {
             peripheral = p
             selfInitiated = initiated
@@ -118,15 +123,20 @@ final class AionNotifRelay: NSObject {
             UserDefaults.standard.set(p.identifier.uuidString, forKey: Self.periphIDKey)
             AionLogger.shared.log("relay adopt \(initiated ? "self" : "attached") state=\(p.state.rawValue)")
         }
-        if alreadyConnected || p.state == .connected {
+        guard ctrlChar == nil, dataChar == nil else { return }
+        if p.state == .connected {
             discover(p)
-        } else if p.state == .disconnected {
+        } else if p.state == .disconnected, Date().timeIntervalSince(lastConnectAt) > 5 {
+            lastConnectAt = Date()
             central?.connect(p, options: nil)
         }
     }
 
     private func discover(_ p: CBPeripheral) {
-        guard p.state == .connected else { return }
+        guard p.state == .connected else {
+            AionLogger.shared.log("relay discover skipped state=\(p.state.rawValue)")
+            return
+        }
         if ctrlChar != nil, dataChar != nil { return }
         p.discoverServices([Self.svcUUID])
     }
@@ -314,7 +324,7 @@ extension AionNotifRelay: CBCentralManagerDelegate {
             guard let list = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],
                   let p = list.first else { return }
             AionLogger.shared.log("relay restored state=\(p.state.rawValue)")
-            self.adopt(p, initiated: false, alreadyConnected: p.state == .connected)
+            self.adopt(p, initiated: false)
         }
     }
 
@@ -327,7 +337,7 @@ extension AionNotifRelay: CBCentralManagerDelegate {
             central.stopScan()
             self.scanningUntil = nil
             AionLogger.shared.log("relay found \(peripheral.identifier.uuidString.prefix(8))")
-            self.adopt(peripheral, initiated: true, alreadyConnected: false)
+            self.adopt(peripheral, initiated: true)
         }
     }
 
