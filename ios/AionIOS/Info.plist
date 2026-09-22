@@ -59,6 +59,8 @@
 		<!-- 2026-09-22 外出监控：iOS 18+ 声明 voip 后，AVCaptureSession 才能在前台之外继续用
 		     （多任务相机访问，无需向苹果申请 entitlement）。不涉及 PushKit/VoIP 推送。 -->
 		<string>voip</string>
+		<!-- 2026-09-23 ANCS 中继：后台维持到板子的 BLE 连接、接收特征值通知 -->
+		<string>bluetooth-central</string>
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>

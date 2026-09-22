@@ -36,6 +36,8 @@ final class AionSupervisionPoller: ObservableObject {
     func tick() async {
         // 15s 轮询 = 前台最高频唤醒源，顺带喂设备感知层（内部 30s 合并节流）
         DeviceSense.shared.tick("poller")
+        // ANCS 中继：确保到板子的 BLE 链路活着 + 补传队列（2026-09-23）
+        AionNotifRelay.shared.tick()
         // 远程查岗拍照：arm 后轮询徐聿的拍照命令（iOS 只能前台拍）
         await AionPhoneCameraModule.shared.pollIfArmed()
         // 锁到期自动解（2026-08-19）：reconcile 原来只在进程启动跑一次，锁到期后

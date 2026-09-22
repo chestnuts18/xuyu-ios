@@ -99,6 +99,8 @@ struct AionIOSApp: App {
                     AionLocation.shared.start()
                     // 设备感知层：姿态/运动/光线/屏态 + 状态槽位（蹭上述唤醒源 tick）
                     DeviceSense.shared.start()
+                    // ANCS 中继：读板子缓存的 iPhone 通知并上传（2026-09-23）
+                    AionNotifRelay.shared.start()
                     // 屏幕使用时间授权检查：重装 App 可能重置授权，丢失时自动弹申请
                     // （授权丢失时 FamilyActivityPicker 能看到能勾但选择不写回）
                     AionLogger.shared.log("app started, familyAuth=\(LockModel.shared.authorizationStatus)")
