@@ -163,7 +163,11 @@ final class AionNotifRelay: NSObject {
         guard seq != 0 else { return }   // 板子说：没待读的了
         let payload = d.subdata(in: 5..<d.count)
         guard let obj = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] else {
-            AionLogger.shared.log("relay bad payload seq=\(seq) len=\(payload.count)")
+            // ⚠️ 必须跳过：DATA 读是「最老的未确认」，不 ACK 板子就永远重发这一条，
+            // 后面的通知全被堵死（2026-09-23 实测：seq=529 卡了整整一轮）。
+            // 宁可丢一条，也不能卡住整条链路。
+            AionLogger.shared.log("relay bad payload seq=\(seq) len=\(payload.count) — skipping")
+            ackOnly(seq)
             return
         }
         let item: [String: Any] = [
@@ -245,6 +249,13 @@ final class AionNotifRelay: NSObject {
             AionLogger.shared.log("relay upload err: \(error.localizedDescription)")
             return false
         }
+    }
+
+    /// 只推进 ACK、不进队列 —— 用于丢弃解析失败的通知，防止堵住整条链路
+    private func ackOnly(_ seq: UInt32) {
+        guard seq > lastAcked else { return }
+        lastAcked = seq
+        writeAck(seq)
     }
 
     private func writeAck(_ seq: UInt32) {
