@@ -231,12 +231,19 @@ final class AionPhoneCameraModule: NSObject {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200,
                   let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let commands = obj["commands"] as? [[String: Any]],
-                  let first = commands.first,
-                  let requestId = first["request_id"] as? String else { return }
-            let cmdFacing = first["facing"] as? String ?? "back"
-            let cmdZoom = Double(first["zoom"] as? Double ?? 1.0)
-            let reason = first["reason"] as? String ?? ""
+                  let commands = obj["commands"] as? [[String: Any]] else { return }
+            guard let first = commands.first else { return }
+            // ⚠️ 命令体是**嵌套**的：{"commands":[{"type":"phone_camera_capture","data":{...}}]}
+            // 2026-09-22 踩过：这里原来读顶层 first["request_id"] → 恒为 nil → guard 静默返回，
+            // 一条日志都不打，照片永远回不来（服务端 pending 明明在）。
+            guard let payload = first["data"] as? [String: Any],
+                  let requestId = payload["request_id"] as? String else {
+                AionLogger.shared.log("phonecam pending command unparsable: \(first)")
+                return
+            }
+            let cmdFacing = payload["facing"] as? String ?? "back"
+            let cmdZoom = Double(payload["zoom"] as? Double ?? 1.0)
+            let reason = payload["reason"] as? String ?? ""
             AionLogger.shared.log("phonecam pending cmd id=\(requestId) reason=\(reason)")
             await captureForEvent(requestId: requestId, facing: cmdFacing, zoom: cmdZoom)
         } catch {
@@ -277,7 +284,9 @@ final class AionPhoneCameraModule: NSObject {
         }
         pendingPhotoDelegate = delegate
         photoOutput.capturePhoto(with: AVCapturePhotoSettings(), delegate: delegate)
-        _ = sem.wait(timeout: .now() + 2.5)
+        // 2026-09-22：2.5s → 5s（安卓可配到 15s）。会话常开时通常几十毫秒就回，
+        // 这道闸只是失败兜底 —— 弱光/冷启动下 2.5 秒太紧，容易白丢一次请求。
+        _ = sem.wait(timeout: .now() + 5.0)
         pendingPhotoDelegate = nil
         return result
     }
