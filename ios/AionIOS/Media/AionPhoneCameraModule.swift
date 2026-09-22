@@ -261,9 +261,12 @@ final class AionPhoneCameraModule: NSObject {
     }
 
     private func captureForEvent(requestId: String, facing: String, zoom: Double) async {
-        AionJSBridge.shared.callWebFunction("onAionPhoneCameraCaptureState", arg: "true")
+        // ⚠️ 必须走 callWebFunctionBool：callWebFunction 把参数包成字符串，而 JS 里
+        // `!!'false'` 恒为 true → 网页 `_phoneEventCaptureActive` 点亮后**永远熄不掉** →
+        // 监控页预览一直卡在「正在为监控事件拍照」（2026-09-22 念宝实测）。
+        AionJSBridge.shared.callWebFunctionBool("onAionPhoneCameraCaptureState", true)
         defer {
-            AionJSBridge.shared.callWebFunction("onAionPhoneCameraCaptureState", arg: "false")
+            AionJSBridge.shared.callWebFunctionBool("onAionPhoneCameraCaptureState", false)
         }
         // 命令指定朝向（与 arm 时不同则重建会话）
         if facing != self.facing {
