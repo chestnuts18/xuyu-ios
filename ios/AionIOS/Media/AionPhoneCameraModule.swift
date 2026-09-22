@@ -21,10 +21,12 @@ final class AionPhoneCameraModule: NSObject {
     private var previewOn = false
     private var lastPreviewPushAt: Double = 0
     private var pendingPhotoDelegate: PhotoCaptureDelegate?
+    private var interruptionObservers: [NSObjectProtocol] = []
 
     override private init() {
         super.init()
         armed = UserDefaults.standard.bool(forKey: "phonecam.armed")
+        observeSessionInterruptions()
     }
 
     // MARK: - 网页动作
@@ -63,14 +65,17 @@ final class AionPhoneCameraModule: NSObject {
         armed = true
         UserDefaults.standard.set(true, forKey: "phonecam.armed")
         AionJSBridge.shared.pushCachePartial(["phoneCamCaps": capabilitiesJSON()])
-        AionLogger.shared.log("phonecam armed facing=\(self.facing)")
+        // 2026-09-22 外出监控 Phase 0：arm 时就把会话点着并常开。
+        // iOS 只允许前台 startRunning()，出门之后没机会再开 —— 不在这儿点着，后台必拍不到。
+        let warm = await startSession()
+        AionLogger.shared.log("phonecam armed facing=\(self.facing) sessionWarm=\(warm)")
         return true
     }
 
     func disarm() {
         armed = false
         UserDefaults.standard.set(false, forKey: "phonecam.armed")
-        stopPreview()
+        stopPreview()   // armed 已置 false → 这里会真正 stopRunning()
         AionLogger.shared.log("phonecam disarmed")
     }
 
@@ -86,7 +91,9 @@ final class AionPhoneCameraModule: NSObject {
 
     func stopPreview() {
         previewOn = false
-        session.stopRunning()
+        // 2026-09-22 外出监控：arm 期间会话保持常开 —— 离开监控页/切后台都不能关
+        // （iOS 只许前台 startRunning，关了后台就再也开不起来）。只有 disarm 才真正关。
+        if !armed { session.stopRunning() }
     }
 
     private func startSession() async -> Bool {
@@ -114,6 +121,15 @@ final class AionPhoneCameraModule: NSObject {
             if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
             if session.canAddOutput(photoOutput) { session.addOutput(photoOutput) }
             session.commitConfiguration()
+            // 2026-09-22 外出监控 Phase 0：多任务相机访问。
+            // iOS 18+ 只要 App 用 iOS 18+ SDK 编译 + 后台模式含 voip，这里就为真 ——
+            // 为真才能在切后台/用别的 App 时继续用摄像头。为假说明 voip 没生效，方案 B 不成立。
+            if session.isMultitaskingCameraAccessSupported {
+                session.isMultitaskingCameraAccessEnabled = true
+                AionLogger.shared.log("phonecam multitaskingCamera supported=1 enabled=1")
+            } else {
+                AionLogger.shared.log("phonecam multitaskingCamera UNSUPPORTED (voip 后台模式没生效？)")
+            }
             if let conn = videoOutput.connection(with: .video) {
                 // videoRotationAngle 是 iOS 17+ API，部署目标 16 用旧接口
                 if #available(iOS 17.0, *) {
@@ -150,10 +166,15 @@ final class AionPhoneCameraModule: NSObject {
         return json
     }
 
-    // MARK: - pending 命令轮询（AionSupervisionPoller 15s 携带，仅前台）
+    // MARK: - pending 命令轮询（AionSupervisionPoller 15s 携带；2026-09-22 起后台也轮询）
 
     func pollIfArmed() async {
-        guard armed, UIApplication.shared.applicationState == .active else { return }
+        // 2026-09-22 外出监控 Phase 0：去掉 applicationState == .active 守卫。
+        // 原来写死「只在前台轮询」，出门一切后台/锁屏就再也拿不到拍照命令 —— 这就是「一直没实装」的全部原因。
+        guard armed else { return }
+        if UIApplication.shared.applicationState != .active {
+            AionLogger.shared.log("phonecam poll (background state=\(UIApplication.shared.applicationState.rawValue))")
+        }
         var components = URLComponents(
             url: APIClient.shared.url(for: "/api/phone-camera/commands/pending"),
             resolvingAgainstBaseURL: false
@@ -283,6 +304,48 @@ final class AionPhoneCameraModule: NSObject {
             "metadata": ["device": DeviceIdentity.deviceId],
         ])
         _ = try? await URLSession.shared.data(for: request)
+    }
+
+    // MARK: - 会话打断观测（2026-09-22 外出监控 Phase 0，纯诊断）
+
+    /// 摄像头被系统掐掉时把原因写进客户端日志（`data/ios_client_logs.log`）。
+    /// 没有这个，「后台到底能不能拍、什么时候死的」只能靠猜。
+    private func observeSessionInterruptions() {
+        let center = NotificationCenter.default
+        let watched: [(Notification.Name, String)] = [
+            (.AVCaptureSessionWasInterrupted, "INTERRUPTED"),
+            (.AVCaptureSessionInterruptionEnded, "interruptionEnded"),
+            (.AVCaptureSessionDidStartRunning, "running"),
+            (.AVCaptureSessionDidStopRunning, "stopped"),
+        ]
+        for (name, label) in watched {
+            // 通知回调是非隔离上下文 —— 照 SenseSystem 的既有写法包 Task { @MainActor }
+            // （Swift 6 严格模式要求，且 UIApplication/AionLogger 都在主隔离域）
+            let token = center.addObserver(forName: name, object: session, queue: .main) { note in
+                let raw = (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? NSNumber)?.intValue
+                Task { @MainActor in
+                    let appState = UIApplication.shared.applicationState.rawValue
+                    let reason = raw.flatMap { AVCaptureSession.InterruptionReason(rawValue: $0) }
+                    let reasonText = reason.map { Self.describeInterruption($0) } ?? "-"
+                    let reasonCode = raw.map { "\($0)" } ?? "-"
+                    AionLogger.shared.log(
+                        "phonecam session \(label) reason=\(reasonCode)(\(reasonText)) appState=\(appState)"
+                    )
+                }
+            }
+            interruptionObservers.append(token)
+        }
+    }
+
+    private static func describeInterruption(_ reason: AVCaptureSession.InterruptionReason) -> String {
+        switch reason {
+        case .videoDeviceNotAvailableInBackground: return "后台不可用"
+        case .audioDeviceInUseByAnotherClient: return "音频被别的 App 占用"
+        case .videoDeviceInUseByAnotherClient: return "摄像头被别的 App 占用"
+        case .videoDeviceNotAvailableWithMultipleForegroundApps: return "分屏/画中画未获授权"
+        case .videoDeviceNotAvailableDueToSystemPressure: return "系统压力"
+        @unknown default: return "未知"
+        }
     }
 }
 

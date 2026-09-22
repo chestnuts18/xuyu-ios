@@ -56,6 +56,9 @@
 		<string>fetch</string>
 		<string>processing</string>
 		<string>remote-notification</string>
+		<!-- 2026-09-22 外出监控：iOS 18+ 声明 voip 后，AVCaptureSession 才能在前台之外继续用
+		     （多任务相机访问，无需向苹果申请 entitlement）。不涉及 PushKit/VoIP 推送。 -->
+		<string>voip</string>
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
