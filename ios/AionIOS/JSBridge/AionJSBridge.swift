@@ -149,6 +149,7 @@ final class AionJSBridge {
       // 定位
       root.AionLocation = {
         getStatus: function(){ return root.__aionCall('location','getStatus'); },
+        getCurrentPosition: function(){ return root.__aionCall('location','getCurrentPosition'); },
         start: function(){ return root.__aionCall('location','start'); },
         stop: function(){ return root.__aionCall('location','stop'); },
         statusText: function(){ return root.__aionSyncCache.locationStatus || ''; }
