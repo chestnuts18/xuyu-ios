@@ -40,8 +40,6 @@ final class AionSupervisionPoller: ObservableObject {
         AionNotifRelay.shared.tick()
         // 远程查岗拍照：arm 后轮询徐聿的拍照命令（iOS 只能前台拍）
         await AionPhoneCameraModule.shared.pollIfArmed()
-        // 位置同步请求（2026-09-25）：网页「同步位置」/ 服务端要求实时定位时立刻响应
-        await AionLocation.shared.pollServerSyncRequest()
         // 锁到期自动解（2026-08-19）：reconcile 原来只在进程启动跑一次，锁到期后
         // 无人检查 deadline → 盾一直挂着（「只能锁不会解」bug）。15s 轮询内复检，
         // 对齐安卓 2s lock guard 语义；后台挂起时由 BGTask tick 兜底（≤15min）。
