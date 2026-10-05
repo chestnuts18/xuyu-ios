@@ -1,18 +1,53 @@
 import Foundation
 import CoreBluetooth
 
-/// 玩具 BLE：SOSEXY 三电机。
-/// 协议照抄 chat.js（EE01 服务 / EE03 写 / EE02 通知，18 字节分包）；
-/// 桥复用 window.AionBle 语义，状态回调走 chat.js 自建的 window.toyNativeBle。
+/// 玩具 BLE：SOSEXY 三电机 + ANKNI（趴趴猫）多玩具体系（2026-10-05 加）。
+/// SOSEXY：服务 EE01 / 写 EE03 / 通知 EE02，18 字节分包（照抄 chat.js）。
+/// ANKNI：广播名以 ANKNI 开头；不限定服务，枚举全部服务的可写特征，
+///        按优先级 DDD1>FFE1>FEE1>AE01>DD11 选写特征；指令为裸 hex（AA 头+校验和，页面 JS 编码）。
+/// 桥复用 window.AionBle 语义，状态回调走网页自建的 window.toyNativeBle（主+子 frame）。
 @MainActor
 final class ToyBLEManager: NSObject, ObservableObject {
     static let shared = ToyBLEManager()
 
-    private static let serviceUUID = CBUUID(string: "EE01")
-    private static let writeUUID = CBUUID(string: "EE03")
-    private static let notifyUUID = CBUUID(string: "EE02")
+    // MARK: - 多玩具 profile
+
+    struct ProfileSpec {
+        let key: String
+        let namePrefix: String
+        let serviceUUID: CBUUID?      // nil = 发现全部服务（ANKNI）
+        let writeUUIDs: [CBUUID]      // 按优先级（SOSEXY 单元素即限定）
+        let notifyUUID: CBUUID?
+    }
+    static let sosexySpec = ProfileSpec(
+        key: "sosexy", namePrefix: "SOSEXY",
+        serviceUUID: CBUUID(string: "EE01"),
+        writeUUIDs: [CBUUID(string: "EE03")],
+        notifyUUID: CBUUID(string: "EE02"))
+    static let ankniSpec = ProfileSpec(
+        key: "ankni", namePrefix: "ANKNI",
+        serviceUUID: nil,
+        writeUUIDs: ["DDD1", "FFE1", "FEE1", "AE01", "DD11"].map { CBUUID(string: $0) },
+        notifyUUID: nil)
 
     @Published private(set) var isConnected = false
+    private(set) var selectedProfileKey = "sosexy"
+    private(set) var deviceName = ""
+    private var ankniTargets: [CBCharacteristic] = []
+    private var discoveredServices = 0
+
+    var currentSpec: ProfileSpec { selectedProfileKey == "ankni" ? Self.ankniSpec : Self.sosexySpec }
+
+    /// 桥的同步缓存（getAnkniWriteTargets 用；对齐安卓 "服务UUID / 特征UUID" 展示）
+    var ankniTargetsJson: String {
+        let rows = ankniTargets.map { ch -> String in
+            (ch.service?.uuid.uuidString ?? "?") + " / " + ch.uuid.uuidString
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: rows),
+              let json = String(data: data, encoding: .utf8) else { return "[]" }
+        return json
+    }
+
     private var central: CBCentralManager?
     private var peripheral: CBPeripheral?
     private var writeChar: CBCharacteristic?
@@ -21,7 +56,7 @@ final class ToyBLEManager: NSObject, ObservableObject {
 
     override private init() { super.init() }
 
-    // MARK: - 网页桥入口（AionBle.connect/disconnect/sendData/isConnected）
+    // MARK: - 网页桥入口（AionBle.connect/disconnect/sendData/isConnected/selectProfile…）
 
     func handle(action: String, args: [String: Any]) async -> Any? {
         switch action {
@@ -37,6 +72,18 @@ final class ToyBLEManager: NSObject, ObservableObject {
             return ["ok": true]
         case "isConnected":
             return ["connected": isConnected]
+        case "selectProfile":
+            let key = ((args["profile"] as? String) ?? "sosexy").lowercased()
+            selectedProfileKey = (key == "ankni") ? "ankni" : "sosexy"
+            AionJSBridge.shared.pushCache()
+            return ["profile": selectedProfileKey]
+        case "selectAnkniWriteTarget":
+            let index = (args["index"] as? Int) ?? -1
+            guard selectedProfileKey == "ankni", index >= 0, index < ankniTargets.count else {
+                return ["ok": false]
+            }
+            writeChar = ankniTargets[index]
+            return ["ok": true]
         default:
             return nil
         }
@@ -51,7 +98,7 @@ final class ToyBLEManager: NSObject, ObservableObject {
             }
             return
         }
-        log("开始扫描 SOSEXY…")
+        log("开始扫描 \(currentSpec.namePrefix)…")
         central = CBCentralManager(delegate: self, queue: nil)
     }
 
@@ -75,9 +122,29 @@ final class ToyBLEManager: NSObject, ObservableObject {
             AionJSBridge.shared.callToyNative("onError", arg: "未连接")
             return
         }
+        if selectedProfileKey == "ankni" {
+            // ANKNI：裸 hex 直写（无 SOSEXY 封包/18 字节分包；协议包 ≤8 字节）
+            guard let data = Self.hexToData(hexCmd) else { return }
+            let type: CBCharacteristicWriteType =
+                writeChar.properties.contains(.write) ? .withResponse : .withoutResponse
+            peripheral?.writeValue(data, for: writeChar, type: type)
+            return
+        }
         let packets = ToyCommand.packets(forHexCmd: hexCmd)
         pendingPackets.append(contentsOf: packets)
         pumpPackets()
+    }
+
+    private static func hexToData(_ hex: String) -> Data? {
+        var data = Data(capacity: hex.count / 2)
+        var idx = hex.startIndex
+        while idx < hex.endIndex {
+            let end = hex.index(idx, offsetBy: 2, limitedBy: hex.endIndex) ?? hex.endIndex
+            guard let byte = UInt8(hex[idx..<end], radix: 16) else { return nil }
+            data.append(byte)
+            idx = end
+        }
+        return data
     }
 
     /// 按序写包：withResponse 优先（对齐 chat.js），包间 30ms
@@ -116,6 +183,8 @@ final class ToyBLEManager: NSObject, ObservableObject {
         writeChar = nil
         pendingPackets.removeAll()
         writing = false
+        ankniTargets.removeAll()
+        discoveredServices = 0
         if let peripheral {
             central?.cancelPeripheralConnection(peripheral)
         }
@@ -126,6 +195,25 @@ final class ToyBLEManager: NSObject, ObservableObject {
 
     private func log(_ msg: String) {
         AionJSBridge.shared.callToyNative("onLog", arg: msg)
+    }
+
+    // MARK: - ANKNI 特征收尾（全部服务的特征发现完成后按优先级选写特征）
+
+    private func finalizeAnkni() {
+        guard !ankniTargets.isEmpty else {
+            AionJSBridge.shared.callToyNative("onError", arg: "ANKNI 没有可写特征")
+            cleanup()
+            return
+        }
+        let order = ["DDD1", "FFE1", "FEE1", "AE01", "DD11"]
+        ankniTargets.sort {
+            (order.firstIndex(of: $0.uuid.uuidString) ?? 999)
+                < (order.firstIndex(of: $1.uuid.uuidString) ?? 999)
+        }
+        writeChar = ankniTargets[0]
+        isConnected = true
+        AionJSBridge.shared.pushCache()
+        AionJSBridge.shared.callToyNativeArgs("onConnected", args: ["ankni", deviceName])
     }
 }
 
@@ -154,8 +242,9 @@ extension ToyBLEManager: CBCentralManagerDelegate {
             let name = peripheral.name
                 ?? (advertisementData[CBAdvertisementDataLocalNameKey] as? String)
                 ?? ""
-            guard name.uppercased().hasPrefix("SOSEXY") else { return }
+            guard name.uppercased().hasPrefix(self.currentSpec.namePrefix) else { return }
             self.peripheral = peripheral
+            self.deviceName = name
             peripheral.delegate = self
             central.stopScan()
             central.connect(peripheral, options: nil)
@@ -166,7 +255,12 @@ extension ToyBLEManager: CBCentralManagerDelegate {
         _ central: CBCentralManager, didConnect peripheral: CBPeripheral
     ) {
         Task { @MainActor in
-            peripheral.discoverServices([Self.serviceUUID])
+            if let service = self.currentSpec.serviceUUID {
+                peripheral.discoverServices([service])
+            } else {
+                // ANKNI：不限服务，全部发现后枚举可写特征
+                peripheral.discoverServices(nil)
+            }
         }
     }
 
@@ -202,9 +296,21 @@ extension ToyBLEManager: CBPeripheralDelegate {
         _ peripheral: CBPeripheral, didDiscoverServices error: Error?
     ) {
         Task { @MainActor in
-            guard let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID })
-            else { return }
-            peripheral.discoverCharacteristics([Self.writeUUID, Self.notifyUUID], for: service)
+            guard error == nil, let services = peripheral.services, !services.isEmpty else { return }
+            if let target = self.currentSpec.serviceUUID {
+                // SOSEXY：只看 EE01
+                guard let service = services.first(where: { $0.uuid == target }) else { return }
+                peripheral.discoverCharacteristics(
+                    [Self.sosexySpec.writeUUIDs[0], Self.sosexySpec.notifyUUID!], for: service
+                )
+            } else {
+                // ANKNI：全部服务
+                self.ankniTargets.removeAll()
+                self.discoveredServices = 0
+                for service in services {
+                    peripheral.discoverCharacteristics(nil, for: service)
+                }
+            }
         }
     }
 
@@ -214,14 +320,26 @@ extension ToyBLEManager: CBPeripheralDelegate {
         error: Error?
     ) {
         Task { @MainActor in
-            guard let chars = service.characteristics else { return }
-            for ch in chars {
-                if ch.uuid == Self.writeUUID { self.writeChar = ch }
-                if ch.uuid == Self.notifyUUID { peripheral.setNotifyValue(true, for: ch) }
+            guard error == nil, let chars = service.characteristics else { return }
+            if self.currentSpec.serviceUUID != nil {
+                // SOSEXY 老逻辑
+                for ch in chars {
+                    if ch.uuid == Self.sosexySpec.writeUUIDs[0] { self.writeChar = ch }
+                    if ch.uuid == Self.sosexySpec.notifyUUID { peripheral.setNotifyValue(true, for: ch) }
+                }
+                self.isConnected = true
+                AionJSBridge.shared.pushCache()
+                AionJSBridge.shared.callToyNativeArgs("onConnected", args: ["sosexy", self.deviceName])
+            } else {
+                // ANKNI：累积可写特征，全部服务回调完成后选优
+                for ch in chars where ch.properties.contains(.write) || ch.properties.contains(.writeWithoutResponse) {
+                    self.ankniTargets.append(ch)
+                }
+                self.discoveredServices += 1
+                if self.discoveredServices >= (peripheral.services?.count ?? 1) {
+                    self.finalizeAnkni()
+                }
             }
-            self.isConnected = true
-            AionJSBridge.shared.pushCache()
-            AionJSBridge.shared.callToyNative("onConnected")
         }
     }
 

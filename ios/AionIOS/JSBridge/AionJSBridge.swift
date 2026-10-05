@@ -132,11 +132,17 @@ final class AionJSBridge {
       };
 
       // 玩具：复用安卓 window.AionBle 语义（chat.js 已有兼容层，网页零改动）
+      // 2026-10-05 多玩具体系（ANKNI 趴趴猫）：profile 走同步缓存 + 异步通知原生；
+      // 故意不提供 getAnkniControlVersion → 玩具页自动改用「页面定时器」调度（iOS 无原生调度器）
       root.AionBle = {
         connect: function(){ return root.__aionCall('ble','connect'); },
         disconnect: function(){ return root.__aionCall('ble','disconnect'); },
         sendData: function(hex){ return root.__aionCall('ble','sendData',{hex:hex}); },
-        isConnected: function(){ return !!root.__aionSyncCache.bleConnected; }
+        isConnected: function(){ return !!root.__aionSyncCache.bleConnected; },
+        getProfile: function(){ return root.__aionSyncCache.bleProfile || 'sosexy'; },
+        selectProfile: function(profile){ var k=String(profile||'sosexy'); root.__aionCall('ble','selectProfile',{profile:k}); try{ root.__aionSyncCache.bleProfile=k; }catch(e){} return true; },
+        getAnkniWriteTargets: function(){ return root.__aionSyncCache.ankniTargetsJson || '[]'; },
+        selectAnkniWriteTarget: function(index){ root.__aionCall('ble','selectAnkniWriteTarget',{index:Number(index)||0}); return true; }
       };
 
       // 健康
@@ -407,6 +413,8 @@ final class AionJSBridge {
             "locationStatus": AionLocation.shared.authStateText,
             "familyAuth": (LockModel.shared.authorizationStatus == .approved) ? "approved" : "denied",
             "bleConnected": ToyBLEManager.shared.isConnected,
+            "bleProfile": ToyBLEManager.shared.selectedProfileKey,
+            "ankniTargetsJson": ToyBLEManager.shared.ankniTargetsJson,
             "supervisionSnapshot": CommandExecutor.shared.buildSnapshotPayload(
                 groups: CommandExecutor.shared.loadGroups()
             ),
@@ -421,11 +429,22 @@ final class AionJSBridge {
 
     /// 调 chat.js 自建的 window.toyNativeBle 回调（onConnected/onDisconnected/onError/onLog）
     func callToyNative(_ fn: String, arg: String? = nil) {
+        callToyNativeArgs(fn, args: arg.map { [$0] } ?? [])
+    }
+
+    /// 多参版 + 主 frame/全部子 frame 遍历（2026-10-05：玩具页在常驻 iframe 里，
+    /// 原生 evaluateJavaScript 只打主 frame；ANKNI 的 onConnected(profile,name) 需要两个参数）
+    func callToyNativeArgs(_ fn: String, args: [String]) {
         guard let webView else { return }
-        let argJs = arg.map { "'\($0.replacingOccurrences(of: "'", with: "\\'"))'" } ?? ""
-        webView.evaluateJavaScript(
-            "window.toyNativeBle && window.toyNativeBle.\(fn) && window.toyNativeBle.\(fn)(\(argJs))"
-        )
+        let argJs = args.map { "'\($0.replacingOccurrences(of: "'", with: "\\'"))'" }.joined(separator: ",")
+        webView.evaluateJavaScript("""
+        (function(){
+          var fn='\(fn)';
+          var call=function(w){ try{ if(w.toyNativeBle && typeof w.toyNativeBle[fn]==='function') w.toyNativeBle[fn](\(argJs)); }catch(e){} };
+          call(window);
+          for(var j=0;j<window.frames.length;j++){ try{ call(window.frames[j]); }catch(e){} }
+        })()
+        """)
     }
 
     /// 调网页全局回调（onAionPhoneCameraCaptureState 等）
