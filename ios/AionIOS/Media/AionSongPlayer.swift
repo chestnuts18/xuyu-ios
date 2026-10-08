@@ -15,9 +15,9 @@ import MediaPlayer
 /// **边界**（iOS 硬规矩，绕不过）：App 被上滑划掉时静默推送送不到 —— 那时只剩
 /// 闹钟响，歌要等打开 App 才放。
 @MainActor
-final class AionSongPlayer {
+final class AionSongPlayer: NSObject, AVAudioPlayerDelegate {
     static let shared = AionSongPlayer()
-    private init() {}
+    private override init() { super.init() }
 
     private var player: AVAudioPlayer?
     private(set) var playing = false
@@ -33,11 +33,7 @@ final class AionSongPlayer {
     }
 
     func stop() {
-        player?.stop()
-        player = nil
-        playing = false
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        AionLogger.shared.log("song: stopped")
+        cleanup(player, log: "song: stopped")
     }
 
     func status() -> [String: Any] {
@@ -81,6 +77,7 @@ final class AionSongPlayer {
             try session.setActive(true)
 
             let p = try AVAudioPlayer(data: data)
+            p.delegate = self
             p.prepareToPlay()
             p.play()
             player = p
@@ -88,6 +85,7 @@ final class AionSongPlayer {
             lastPlayedAt = Date()
             AionLogger.shared.log("song: playing \(title ?? "-") bytes=\(data.count)")
             updateNowPlaying(title: title, artist: artist)
+            scheduleCleanup(for: p)
         } catch {
             lastError = error.localizedDescription
             AionLogger.shared.log("song: play failed \(error.localizedDescription)")
@@ -100,6 +98,51 @@ final class AionSongPlayer {
         if let title { info[MPMediaItemPropertyTitle] = title }
         if let artist { info[MPMediaItemPropertyArtist] = artist }
         info[MPMediaItemPropertyPlaybackDuration] = player?.duration ?? 0
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info.isEmpty ? nil : info
+        if info.isEmpty {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            MPNowPlayingInfoCenter.default().playbackState = .stopped
+        } else {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+            MPNowPlayingInfoCenter.default().playbackState = .playing
+        }
+    }
+
+    // MARK: - 收尾（2026-10-08）
+    // 歌播完必须清掉系统「正在播放」状态：此前只 start 不 cleanup，歌停了
+    // nowPlayingInfo / 播放状态仍挂着，其他 App（抖音等）会弹出
+    // 「检测到其他软件在播放」并暂停（念宝刷抖音被暂停的根因）。
+
+    /// 歌自然播完（delegate 回调不在主线程，跳回主线程处理）
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor [weak self] in
+            guard let self, self.player === player else { return }
+            self.cleanup(player, log: "song: finished")
+        }
+    }
+
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        Task { @MainActor [weak self] in
+            guard let self, self.player === player else { return }
+            self.cleanup(player, log: "song: decode error \(error?.localizedDescription ?? "-")")
+        }
+    }
+
+    /// 兜底：按歌长 + 2 秒定时收尾（防 delegate 极端情况下不触发）
+    private func scheduleCleanup(for p: AVAudioPlayer) {
+        let delay = max(2.0, p.duration + 2.0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.player === p, !p.isPlaying else { return }
+            self.cleanup(p, log: "song: auto-cleaned (duration timer)")
+        }
+    }
+
+    /// 统一收尾：停播放器 + 清掉锁屏/控制中心的「正在播放」
+    private func cleanup(_ p: AVAudioPlayer?, log: String) {
+        p?.stop()
+        player = nil
+        playing = false
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        MPNowPlayingInfoCenter.default().playbackState = .stopped
+        AionLogger.shared.log(log)
     }
 }
