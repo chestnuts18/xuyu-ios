@@ -142,7 +142,63 @@ final class AionHealthKit: ObservableObject {
         await uploadQuantities(infrequentTypes, window: 24 * 3600)
         await uploadSleep(window: 24 * 3600)
         await uploadWorkouts(window: 72 * 3600)
+        await uploadTodayTotals()
         AionLogger.shared.log("hk upload cycle end, lastInfo=\(lastUploadInfo)")
+    }
+
+    // MARK: - 今日累计汇总（2026-10-20：与健康 App 同口径，替代 HAE）
+
+    /// "累计型"指标：原始样本会被 iPhone + Watch 双设备各记一份，相加即虚高（实测 ~50%）。
+    /// 改用 HKStatisticsQuery（cumulativeSum）读"今日累计"，HealthKit 自动按设备优先级合并去重，
+    /// 结果与健康 App 显示一致。上传 source=aion_summary，服务器优先使用这个源。
+    private static let cumulativeTypes: [HKQuantityTypeIdentifier] = [
+        .stepCount,
+        .activeEnergyBurned,
+        .basalEnergyBurned,
+        .distanceWalkingRunning,
+        .flightsClimbed,
+        .appleStandTime,
+        .appleExerciseTime,
+    ]
+
+    private func uploadTodayTotals() async {
+        let now = Date()
+        let start = Calendar.current.startOfDay(for: now)
+        var metrics: [[String: Any]] = []
+        for id in Self.cumulativeTypes {
+            guard let type = HKQuantityType.quantityType(forIdentifier: id) else { continue }
+            let unit = Self.unit(for: id)
+            guard let total = await fetchTodayTotal(type: type, from: start, to: now, unit: unit) else { continue }
+            let value = id == .distanceWalkingRunning ? total / 1000 : total   // m → km
+            metrics.append([
+                "type": Self.typeName(for: id),
+                "value": value,
+                "unit": Self.unitName(for: id),
+                "recorded_at": now.timeIntervalSince1970,
+                "source": "aion_summary",
+            ])
+        }
+        guard !metrics.isEmpty else { return }
+        if await AionHealthUploader.shared.upload(metrics: metrics) {
+            lastUploadInfo = "今日汇总已上传 \(metrics.count) 项"
+        }
+    }
+
+    private func fetchTodayTotal(
+        type: HKQuantityType, from: Date, to: Date, unit: HKUnit
+    ) async -> Double? {
+        await withCheckedContinuation { continuation in
+            // options 留空 = 包含与时间段重叠的样本（与健康 App 日统计口径一致）
+            let predicate = HKQuery.predicateForSamples(withStart: from, end: to, options: [])
+            let query = HKStatisticsQuery(
+                quantityType: type,
+                quantitySamplePredicate: predicate,
+                options: .cumulativeSum
+            ) { _, stats, _ in
+                continuation.resume(returning: stats?.sumQuantity()?.doubleValue(for: unit))
+            }
+            store.execute(query)
+        }
     }
 
     // MARK: - 锻炼记录（HKWorkout → POST /api/health/workouts，运动教练链路 2026-08-25）
