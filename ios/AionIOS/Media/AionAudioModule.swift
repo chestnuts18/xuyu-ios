@@ -55,7 +55,7 @@ final class AionAudioModule {
             commonFormat: .pcmFormatInt16, sampleRate: 16000,
             channels: 1, interleaved: true),
             let conv = AVAudioConverter(from: hwFormat, to: target)
-        else { return false }
+        else { restorePlaybackSession(); return false }
         converter = conv
         pendingData.removeAll()
         inputNode.removeTap(onBus: 0)
@@ -69,6 +69,7 @@ final class AionAudioModule {
             AionLogger.shared.log("audio capture started")
             return true
         } catch {
+            restorePlaybackSession()
             AionLogger.shared.log("audio start failed: \(error.localizedDescription)")
             return false
         }
@@ -79,7 +80,17 @@ final class AionAudioModule {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         recording = false
+        // 2026-10-24：录完必须把共享会话还回去。否则一直停在 playAndRecord/voiceChat——
+        // 微信语音会被顶、外放路由也不对，正是「影响发微信」的一条。
+        restorePlaybackSession()
         AionLogger.shared.log("audio capture stopped")
+    }
+
+    /// 录音结束/失败后，把会话还原成网页播放模式（mixWithOthers，不抢别人焦点）
+    private func restorePlaybackSession() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        try? session.setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
     // 音频线程：转 16k Int16 → 攒 640 samples → base64 → 主线程推网页

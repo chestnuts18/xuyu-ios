@@ -35,7 +35,11 @@ struct AionWebView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         // 音频会话：播放类，静音开关不挡音乐（对齐安卓 USAGE_ALARM 精神）
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+        // 2026-10-24：必须 .mixWithOthers —— 网页的提示音/消息音不能抢走抖音、微信的音频焦点。
+        // 旧版没加这个选项：5 秒的哨兵提示音一响就把别的 App 掐掉，而且会话从不 setActive(false)，
+        // 播完焦点也不还，体感就是「播完没结束」。
+        try? AVAudioSession.sharedInstance().setCategory(
+            .playback, mode: .default, options: [.mixWithOthers])
         try? AVAudioSession.sharedInstance().setActive(true)
 
         let config = WKWebViewConfiguration()
