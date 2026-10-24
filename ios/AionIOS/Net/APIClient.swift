@@ -278,11 +278,24 @@ final class APIClient: ObservableObject {
         let ordered = orderedCandidatesForCurrentPath()
         guard !ordered.isEmpty else { return false }
         // 并行探测：总耗时 = 最慢一个候选（3s），蜂窝下不再串行等 LAN 超时
+        let currentURL = baseURL
         let results = await withTaskGroup(
             of: (Candidate, Bool).self, returning: [(Candidate, Bool)].self
         ) { group in
             for c in ordered {
-                group.addTask { (c, await self.probe(c)) }
+                group.addTask {
+                    let first = await self.probe(c)
+                    // 2026-10-25：当前线路**一次超时不判死**。
+                    // iPhone 在 2.4G/5G 之间漫游有 1~3 秒断流，正好撞上 3 秒探针，
+                    // 旧逻辑就「一次失败即换线」→ 整页重载 → 用户打一半的字没了
+                    //（念宝 10-24 晚 23:49/23:51/23:57/23:59 被重载四次）。
+                    // 给当前线路一次 0.5 秒后的补考；其余候选探一次就够。
+                    if !first && c.url == currentURL {
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        return (c, await self.probe(c))
+                    }
+                    return (c, first)
+                }
             }
             var out: [(Candidate, Bool)] = []
             for await r in group { out.append(r) }
@@ -297,6 +310,17 @@ final class APIClient: ObservableObject {
         AionLogger.shared.log("apiclient probe ok=[\(okURLs.map { $0.absoluteString }.joined(separator: " "))] hit=\(hit.url.absoluteString) base=\(baseURL.absoluteString) pref=\(Self.preference.rawValue)")
         if hit.url == baseURL { return false }
         let currentOK = results.first { $0.0.url == baseURL }?.1 ?? false
+        // 2026-10-25：**升回局域网要连续确认**。2.4G 抖动时 LAN 会时通时不通，
+        // 单次探通就升 = 两分钟后又被打回 CF = 白白多两次整页重载。
+        // 隔 0.8 秒再探一次，两次都通才升（总开销 ~5 秒，只在真的能升时付）。
+        if currentOK, hit.key == "lan", hit.url != baseURL,
+           Date().timeIntervalSince(lastSwitchAt) >= Self.lanUpgradeThrottle {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard await probe(hit) else {
+                AionLogger.shared.log("apiclient lanUpgrade unconfirmed（抖动），保持 \(baseURL.absoluteString)")
+                return false
+            }
+        }
         return adoptIfAllowed(hit, currentOK: currentOK)
     }
 
