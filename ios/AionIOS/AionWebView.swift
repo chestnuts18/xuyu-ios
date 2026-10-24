@@ -4,6 +4,12 @@ import AVFoundation
 
 /// Aion 壳状态：连接失败时显示重试页
 final class WebModel: ObservableObject {
+    /// 2026-10-25：改成全局单例——App 层也要能把 failed 置起来：
+    /// 锁定线路探不通时立刻弹重试页（旧行为是壳层根本拿不到这个状态，
+    /// 页面是家里加载好的，断网后没有任何导航失败回调，只能卡到回家）。
+    static let shared = WebModel()
+    private init() {}
+
     @Published var failed = false
     weak var webView: WKWebView?
     // 重载冷却（2026-08-25 频闪修复）：WebKit 在 provisional 导航失败后
@@ -15,6 +21,9 @@ final class WebModel: ObservableObject {
     func retry() {
         failed = false
         webView?.reload()
+        // 2026-10-25：手动重试也顺手重探一次——否则锁定线路时 30 秒节流会挡住
+        // 下一轮判定，用户点了「重试」还得干等半分钟才知道到底通没通。
+        Task { @MainActor in APIClient.shared.forceProbe() }
     }
 
     /// 换线路（重试页按钮 / 设置页走桥）：先探路再切。

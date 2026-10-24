@@ -89,6 +89,12 @@ struct AionIOSApp: App {
                         AionLogger.shared.log("webview routeReload \(target.absoluteString) (from \(webView.url?.absoluteString ?? "nil"))")
                         webView.load(URLRequest(url: target))
                     }
+                    // 2026-10-25：锁定线路探不通 → 弹重试页问用户要不要换线。
+                    // 旧行为：出门后页面是家里加载好的，断网不产生任何导航失败，
+                    // 探针又被锁定线路默默吞掉 —— 一片死页面卡到回家为止。
+                    APIClient.shared.onLockedRouteUnreachable = {
+                        WebModel.shared.failed = true
+                    }
                     // 后台能力：监管轮询 + 健康上报循环 + 定位心跳（不依赖网页打开）
                     PushRegistrar.shared.start()
                     AionSupervisionPoller.shared.start()

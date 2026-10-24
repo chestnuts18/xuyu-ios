@@ -40,6 +40,12 @@ final class APIClient: ObservableObject {
     private(set) var currentToken: String?
     /// 基址切换回调（WebView 用它重载；保留当前路径，见 urlPreservingPath）
     var onBaseURLChanged: ((URL) -> Void)?
+    /// 锁定线路探不通 → 通知壳层弹重试页（2026-10-25）。
+    /// 旧行为：锁「在家」出门后，页面是家里加载好的，网络断了也不会触发任何导航失败，
+    /// 探针又只默默 return false —— 一片旧内容卡到回家为止，用户没有任何出口。
+    /// 现在探不通就喊一声，由重试页问用户「要不要换线路」。
+    var onLockedRouteUnreachable: (() -> Void)?
+    private var lastUnreachableNotifyAt: Date = .distantPast
 
     private static let cacheKey = "aion_base_url"
     private static let prefKey = "aion_route_preference"
@@ -107,9 +113,13 @@ final class APIClient: ObservableObject {
             baseURL = Self.candidates[0].url
             currentToken = Self.candidates[0].token
         }
-        // 网络路径变化（切 WiFi/开关 VPN）→ 重探，自动跟住
+        // 网络路径变化（切 WiFi/开关 VPN）→ 立即重探，自动跟住。
+        // 2026-10-25：这里必须清掉 30 秒节流。出门从 WiFi 掉到蜂窝的那一刻就是
+        // 「锁定线路已经不可能通」的时刻，被节流挡住的这几百毫秒到几十秒里，
+        // 用户看到的就是一片卡死的旧页面（念宝报的「出门卡死，回家才活」）。
         monitor.pathUpdateHandler = { [weak self] _ in
             Task { @MainActor [weak self] in
+                self?.lastProbeAt = .distantPast
                 self?.probeIfNeeded(bypassVerifyWindow: true)
             }
         }
@@ -237,6 +247,16 @@ final class APIClient: ObservableObject {
         return comps.url ?? base
     }
 
+    /// 手动重试用：清掉 30 秒节流，立刻探一轮。
+    /// 用户点了「重试」就该马上有反馈，不能让他干等节流窗口过去。
+    func forceProbe() {
+        lastProbeAt = .distantPast
+        // 用户主动重试 → 也解掉「提示」的节流，失败就立刻再问一次，
+        // 否则点了重试要干等 30 秒才看到重试页回来。
+        lastUnreachableNotifyAt = .distantPast
+        probeIfNeeded(bypassVerifyWindow: true)
+    }
+
     private func probeIfNeeded(bypassVerifyWindow: Bool) {
         let now = Date()
         guard now.timeIntervalSince(lastProbeAt) >= Self.probeThrottle else { return }
@@ -270,11 +290,40 @@ final class APIClient: ObservableObject {
         }
         if Task.isCancelled { return false }
         let okURLs = Set(results.filter { $0.1 }.map { $0.0.url })
-        guard let hit = ordered.first(where: { okURLs.contains($0.url) }) else { return false }
+        guard let hit = ordered.first(where: { okURLs.contains($0.url) }) else {
+            notifyLockedRouteUnreachable()
+            return false
+        }
         AionLogger.shared.log("apiclient probe ok=[\(okURLs.map { $0.absoluteString }.joined(separator: " "))] hit=\(hit.url.absoluteString) base=\(baseURL.absoluteString) pref=\(Self.preference.rawValue)")
         if hit.url == baseURL { return false }
         let currentOK = results.first { $0.0.url == baseURL }?.1 ?? false
         return adoptIfAllowed(hit, currentOK: currentOK)
+    }
+
+    /// 锁定线路这一轮没探通 → 通知壳层弹重试页。
+    /// 只在用户明确锁了某条线时喊：自动模式本来就会自己换线，弹窗只会打扰。
+    /// 30 秒节流：网络来回抖时，重试页不许反复冒出来盖住页面。
+    private func notifyLockedRouteUnreachable() {
+        guard Self.preference != .auto else { return }
+        guard Date().timeIntervalSince(lastUnreachableNotifyAt) >= 30 else { return }
+        lastUnreachableNotifyAt = Date()
+        AionLogger.shared.log("apiclient lockedRouteUnreachable pref=\(Self.preference.rawValue)")
+        onLockedRouteUnreachable?()
+    }
+
+    /// 重试页用：把**所有**候选（含被锁定排除掉的那几条）并行探一遍。
+    /// 锁「在家」的人在门外最需要知道的事实是「哪条还能走」——三秒探完直接亮绿点，
+    /// 不用挨个点一遍再等它回话。
+    func probeAvailability() async -> [String: Bool] {
+        let all = Self.allCandidates
+        return await withTaskGroup(
+            of: (String, Bool).self, returning: [String: Bool].self
+        ) { group in
+            for c in all { group.addTask { (c.key, await self.probe(c)) } }
+            var out: [String: Bool] = [:]
+            for await r in group { out[r.0] = r.1 }
+            return out
+        }
     }
 
     /// 采纳裁决（2026-09-21 念宝拍板，治「聊着聊着被踢回主界面」）：
