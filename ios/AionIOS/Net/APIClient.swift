@@ -393,21 +393,26 @@ final class APIClient: ObservableObject {
         return true
     }
 
-    /// 蜂窝网络下跳过局域网候选（流量时 LAN 必不通，省 3 秒串行超时）；
-    /// 固定线路时不剔除（用户选的就得试，不通也是他自己选的）
+    /// 候选顺序：固定线路只留用户选的那一条，自动模式全部试。
+    ///
+    /// 2026-10-27：**不再因为 iOS 报「蜂窝」就剔除局域网候选**。
+    /// iOS 的 NWPath 主接口在 WiFi 质量差时会切到蜂窝（「无线局域网助理」），
+    /// 可局域网其实完全可达。念宝 10-27 被这条规则坑了一整晚：人在家、WiFi 连着，
+    /// 探针却只探公网隧道 → 页面绕 CF 往返（隧道日志来源是她家 IPv6 240e:...），
+    /// 一有机会又升回 LAN —— 两边横跳，20 小时整页重载 49 次。
+    /// 剔除 LAN 省下的是出门时一次超时（局域网探针已单独设 2 秒），
+    /// 留下它保住的是「在家永远能用局域网」。
     private func orderedCandidatesForCurrentPath() -> [Candidate] {
-        var list = Self.candidates
-        if Self.preference == .auto, monitor.currentPath.usesInterfaceType(.cellular) {
-            list.removeAll { $0.key == "lan" }
-        }
-        return list
+        return Self.candidates
     }
 
     /// GET /api/health/injection：读内存缓存摘要，最轻、无副作用，2xx 即胜出
     private func probe(_ candidate: Candidate) async -> Bool {
         let url = candidate.url.appendingPathComponent("/api/health/injection")
         var request = URLRequest(url: url)
-        request.timeoutInterval = 5
+        // 局域网探针 2 秒就够（本地一个来回，量级是毫秒）；公网候选留 5 秒。
+        // 这样「蜂窝下也探 LAN」不会拖慢出门切换。
+        request.timeoutInterval = candidate.key == "lan" ? 2 : 5
         if let token = candidate.token {
             request.setValue(token, forHTTPHeaderField: "X-Aion-Token")
         }
