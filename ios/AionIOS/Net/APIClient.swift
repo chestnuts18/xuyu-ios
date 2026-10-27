@@ -54,6 +54,21 @@ final class APIClient: ObservableObject {
     /// 自动模式「升回局域网」节流：WiFi 抖一下不要来回切（切一次 = 页面重载一次）
     private static let lanUpgradeThrottle: TimeInterval = 120
 
+    /// 探针专用会话（2026-10-27）：不复用 URLSession.shared。
+    /// App 常驻一堆积轮询（定位/监管/健康/设备上下文），2.4G 高抖时共享连接池
+    /// 会让探针排在队尾——3 秒超时里可能一半是排队时间，把「网卡了一下」
+    /// 误判成「这条线路死了」，换线一次就整页重载一次（念宝 20 小时被重载 49 次）。
+    private static let probeSession: URLSession = {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 5
+        cfg.timeoutIntervalForResource = 6
+        cfg.waitsForConnectivity = false
+        cfg.urlCache = nil
+        cfg.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        cfg.httpMaximumConnectionsPerHost = 1
+        return URLSession(configuration: cfg)
+    }()
+
     /// 家里优先：局域网直连。Tailscale 兜底出门，Cloudflare Tunnel 收尾。
     /// 隧道 token 经 CI Secrets 注入（Info.plist AION_TUNNEL_TOKEN 构建设置展开，
     /// signed job 用 AION_TUNNEL_TOKEN="${{ secrets... }}" xcodebuild 前缀传入）——
@@ -290,9 +305,17 @@ final class APIClient: ObservableObject {
                     // 旧逻辑就「一次失败即换线」→ 整页重载 → 用户打一半的字没了
                     //（念宝 10-24 晚 23:49/23:51/23:57/23:59 被重载四次）。
                     // 给当前线路一次 0.5 秒后的补考；其余候选探一次就够。
+                    // 2026-10-27：0.5 秒的一次补考还是常常撞在断流里（2.4G 抖动实测
+                    // 1~3 秒，念宝 20 小时被整页重载 49 次）。改成两次补考、间隔 1.5 秒：
+                    // 当前线路共 3 次机会、总窗口约 18 秒，只有真断了才换线。
+                    // 换线 = 整页重载 = 打一半的字全丢，宁可多等十几秒。
                     if !first && c.url == currentURL {
-                        try? await Task.sleep(nanoseconds: 500_000_000)
-                        return (c, await self.probe(c))
+                        for _ in 0..<2 {
+                            try? await Task.sleep(nanoseconds: 1_500_000_000)
+                            if Task.isCancelled { return (c, false) }
+                            if await self.probe(c) { return (c, true) }
+                        }
+                        return (c, false)
                     }
                     return (c, first)
                 }
@@ -384,12 +407,12 @@ final class APIClient: ObservableObject {
     private func probe(_ candidate: Candidate) async -> Bool {
         let url = candidate.url.appendingPathComponent("/api/health/injection")
         var request = URLRequest(url: url)
-        request.timeoutInterval = 3
+        request.timeoutInterval = 5
         if let token = candidate.token {
             request.setValue(token, forHTTPHeaderField: "X-Aion-Token")
         }
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await Self.probeSession.data(for: request)
             return (response as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
         } catch {
             return false
