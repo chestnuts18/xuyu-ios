@@ -93,6 +93,9 @@ final class AionJSBridge {
         w.AionRoute = r.AionRoute;
         w.AionAlarm = r.AionAlarm;
         w.AionSong = r.AionSong;
+        w.AionImageSaver = r.AionImageSaver;
+        w.AionRepairFiles = r.AionRepairFiles;
+        w.AionExternal = r.AionExternal;
       }
 
       if (root.__aionBridgeInstalled) { linkFrame(window, root); return; }
@@ -236,6 +239,24 @@ final class AionJSBridge {
         play: function(path, title, artist){ return root.__aionCall('song','play',{path:path,title:title,artist:artist}); },
         stop: function(){ return root.__aionCall('song','stop'); },
         status: function(){ return root.__aionCall('song','status'); }
+      };
+
+      // 存图到相册（2026-10-29）：对齐安卓 WebViewActivity 的 AionImageSaver。
+      // 网页侧 chat.js/chatroom.js/image-viewer.js/album.js/theater-studio.js/repair.js
+      // 早就探这个对象——注入它之前，点「保存图片」会退到 <a download>，WKWebView 不落地。
+      root.AionImageSaver = {
+        save: function(base64, filename){ return root.__aionCall('photo','save',{data:base64, filename:filename}); }
+      };
+
+      // 维修室附件下载（2026-10-29）：对齐安卓 AionRepairFiles.save(url, filename)
+      root.AionRepairFiles = {
+        save: function(url, filename){ return root.__aionCall('repairfile','save',{url:url, filename:filename}); }
+      };
+
+      // 外部链接交系统浏览器（2026-10-29）：对齐安卓 AionExternal.open(url)。
+      // 没有它时聊天里点链接会在当前 WebView 里打开 → 整页跳走、把聊天页顶掉。
+      root.AionExternal = {
+        open: function(url){ return root.__aionCall('external','open',{url:url}); }
       };
 
       linkFrame(window, root);
@@ -395,6 +416,31 @@ final class AionJSBridge {
             default:
                 return AionSongPlayer.shared.status()
             }
+
+        case "photo":
+            // 存图到相册（2026-10-29）。返回 Bool 单值——resolve 里有专门的 Bool 分支，
+            // 不能用字典（网页不 await 这个结果，但日志里要能看出成败）
+            let base64 = (req.args["data"] as? String) ?? ""
+            let name = (req.args["filename"] as? String) ?? "image.png"
+            guard !base64.isEmpty else { return false }
+            return await AionPhotoSaver.shared.save(base64: base64, filename: name)
+
+        case "repairfile":
+            // 维修室附件（2026-10-29）：下载后弹系统分享面板
+            let urlString = (req.args["url"] as? String) ?? ""
+            let filename = (req.args["filename"] as? String) ?? "attachment"
+            guard !urlString.isEmpty else { return false }
+            AionRepairFileSaver.shared.save(urlString: urlString, filename: filename)
+            return true
+
+        case "external":
+            // 外部链接（2026-10-29）：交系统浏览器，别把聊天页顶掉
+            let raw = (req.args["url"] as? String) ?? ""
+            guard let url = URL(string: raw),
+                  let scheme = url.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https" else { return false }
+            UIApplication.shared.open(url)
+            return true
 
         default:
             return nil

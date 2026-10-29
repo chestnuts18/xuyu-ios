@@ -207,6 +207,19 @@ final class CommandExecutor {
             saveDeviceLockState()
             return (true, "")
 
+        case "come_home", "look_at_me":
+            // 唤回（2026-10-29）：弹原生「此刻，看着我」窗，对齐安卓 AttentionCallDialog。
+            // 旧版这里落到 default → unknown_action → 徐聿看到「未能唤回」，所以服务端
+            // 一直把这两条指令挡在队列外（app_supervision_ai.py 提前 return）。现在两端
+            // 都补上了：服务端入队、这里执行。
+            // 服务端同时写 attention_state.json，快捷指令 gate 那条路（开抖音/小红书
+            // → 跳回 XuYu）照旧独立工作，两边不冲突。
+            AttentionCallController.present(
+                message: command.message ?? "",
+                action: command.action
+            )
+            return (true, "")
+
         default:
             return (false, "unknown_action")
         }

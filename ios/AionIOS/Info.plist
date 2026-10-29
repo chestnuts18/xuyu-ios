@@ -32,6 +32,8 @@
 	<string>和徐聿视频通话、拍照给他看</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>给徐聿发照片</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>把聊天里的图片存到你的相册</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>把心率、步数、能耗同步给你的 Aion，让徐聿知道你的状态</string>
 	<key>NSHealthUpdateUsageDescription</key>
