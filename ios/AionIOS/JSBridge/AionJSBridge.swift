@@ -439,7 +439,10 @@ final class AionJSBridge {
             guard let url = URL(string: raw),
                   let scheme = url.scheme?.lowercased(),
                   scheme == "http" || scheme == "https" else { return false }
-            UIApplication.shared.open(url)
+            // 显式走带 completionHandler 的版本：iOS 26 SDK 新增了 async 重载
+            // open(_:) ，在 async 上下文里裸调会被解析成它（CI 报
+            // "expression is 'async' but is not marked with 'await'"）。
+            UIApplication.shared.open(url, options: [:], completionHandler: nil)
             return true
 
         default:
