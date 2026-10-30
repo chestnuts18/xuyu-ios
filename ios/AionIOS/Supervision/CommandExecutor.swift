@@ -214,6 +214,23 @@ final class CommandExecutor {
             // 都补上了：服务端入队、这里执行。
             // 服务端同时写 attention_state.json，快捷指令 gate 那条路（开抖音/小红书
             // → 跳回 XuYu）照旧独立工作，两边不冲突。
+            // 2026-10-30 修：上游安卓的 look_at_me = 整机锁 + 唤回（AppSupervisionRuntime
+            // 把 look_at_me 和 device_lock 走同一分支）；iOS 之前只弹窗没上锁，服务端却回
+            // 「唤回了…并锁定了手机 N 分钟」→ 念宝看到「唤回以后没锁上」。come_home 仍只
+            // 唤回、不动任何锁定状态（上游注释：recall must not change focus state）。
+            if command.action == "look_at_me" {
+                deviceLockState = DeviceLockState(
+                    effectiveState: "LOCKED",
+                    lock: LockDirective(
+                        roleId: command.roleId ?? "aion",
+                        message: command.message ?? "",
+                        deadlineWallMs: deadline
+                    ),
+                    temporaryUnlock: nil
+                )
+                AionShieldStore.shared.applyDeviceLock(groups: groups)
+                saveDeviceLockState()
+            }
             AttentionCallController.present(
                 message: command.message ?? "",
                 action: command.action
