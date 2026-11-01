@@ -89,6 +89,37 @@ final class AionAlarmKit {
             known.removeValue(forKey: sid)
         }
 
+        // ③b 系统侧对账（2026-11-02 加）——本地登记表说「排着」，但系统里实际已经没有了
+        // （iOS 升级 / 系统清理 / App 数据迁移都可能把 AlarmKit 闹钟清掉，且不通知 App）。
+        // 不清掉本地记录的话，下面第 ④ 步会因为「时间没变」永远 continue —— 闹钟再也不响。
+        // 2026-11-01 10:30 那次「排上了却没叫」最可疑的就是这条路径。
+        //
+        // ⚠️ `alarms` 是 throwing property（`try AlarmManager.shared.alarms`）。
+        //    读失败时**跳过对账**，绝不能把本地记录全判死——那会在系统闹钟其实还在时
+        //    把它们 cancel 掉重排，白白制造 churn（Apple 论坛说 churn 会加剧失响）。
+        var systemIds: Set<UUID> = []
+        var systemReadOK = true
+        do {
+            systemIds = Set(try AlarmManager.shared.alarms.map { $0.id })
+        } catch {
+            systemReadOK = false
+            AionLogger.shared.log("alarm sync(\(reason)) 读系统闹钟失败，跳过对账: \(error.localizedDescription)")
+        }
+        var staleIds: [String] = []
+        if systemReadOK {
+            for (sid, info) in known {
+                guard let s = info["uuid"] as? String, let u = UUID(uuidString: s) else {
+                    staleIds.append(sid)  // 记录坏了，当系统里没有处理
+                    continue
+                }
+                if !systemIds.contains(u) { staleIds.append(sid) }
+            }
+            for sid in staleIds { known.removeValue(forKey: sid) }
+            if !staleIds.isEmpty {
+                AionLogger.shared.log("alarm sync(\(reason)) 系统侧缺 \(staleIds.count) 个，重排")
+            }
+        }
+
         // ④ 登记新闹钟；时间改过的先撤旧的再重排
         for item in items {
             guard let date = Self.parseTrigger(item.triggerAt) else { continue }
@@ -114,9 +145,10 @@ final class AionAlarmKit {
         saveScheduled(known)
         out["added"] = added
         out["removed"] = removed
+        out["systemDropped"] = staleIds.count
         out["scheduled"] = known.count
-        if !quiet || added > 0 || removed > 0 {
-            AionLogger.shared.log("alarm sync(\(reason)) ok server=\(items.count) added=\(added) removed=\(removed) total=\(known.count)")
+        if !quiet || added > 0 || removed > 0 || !staleIds.isEmpty {
+            AionLogger.shared.log("alarm sync(\(reason)) ok server=\(items.count) added=\(added) removed=\(removed) dropped=\(staleIds.count) total=\(known.count) system=\(systemIds.count)")
         }
         return out
     }
@@ -130,7 +162,15 @@ final class AionAlarmKit {
         case .notDetermined: authorized = "notDetermined"
         @unknown default: authorized = "unknown"
         }
-        return ["supported": true, "authorized": authorized, "scheduled": loadScheduled().count]
+        // system = 系统（AlarmKit）里真实存在的闹钟数，与本地登记数对不上就是异常；
+        // 读取失败记 -1（alarms 是 throwing property，见 sync 里的注释）
+        let systemCount = (try? AlarmManager.shared.alarms.count) ?? -1
+        return [
+            "supported": true,
+            "authorized": authorized,
+            "scheduled": loadScheduled().count,
+            "system": systemCount,
+        ]
     }
 
     /// 撤销手机上所有由本 App 登记的系统闹钟（调试用）

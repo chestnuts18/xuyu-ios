@@ -37,6 +37,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             completionHandler(.newData)
             return
         }
+        // 静默闹钟同步（2026-11-02）：徐聿设完闹钟，服务器戳一条 content-available 推送，
+        // App 在后台醒来把闹钟排进 AlarmKit。没有这条的话，用户设完就锁屏 →
+        // 前台 30 秒 tick 不跑 → 只能等下次回前台，短时闹钟会整个错过。
+        // ⚠️ 静默推送不保证送达（系统节流 / App 被划掉），它只是补充，不是主链路。
+        if userInfo["aion_sync_alarms"] != nil {
+            syncSystemAlarms(reason: "push", quiet: true)
+            completionHandler(.newData)
+            return
+        }
         completionHandler(.noData)
     }
 
@@ -115,10 +124,12 @@ struct AionIOSApp: App {
                     }
                     // 启动即同步一次系统闹钟（iOS 26+ 才有实际动作）
                     syncSystemAlarms(reason: "launch")
-                    // 前台每 90 秒补一次：徐聿在聊天里设闹钟时 App 正在前台、scenePhase
+                    // 前台每 30 秒补一次：徐聿在聊天里设闹钟时 App 正在前台、scenePhase
                     // 压根不变，只靠回前台事件会漏掉（后台时定时器不触发，天然只在
                     // 合适的时候跑）。无变化时不刷日志。
-                    Timer.scheduledTimer(withTimeInterval: 90, repeats: true) { _ in
+                    // 2026-11-02 由 90 秒改 30 秒：90 秒的窗口会让「设完闹钟马上锁屏」
+                    // 的短时闹钟错过排程（11-01 11:23 那个 55 秒测试就是这么漏的）。
+                    Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
                         syncSystemAlarms(reason: "tick", quiet: true)
                     }
                     Task { await AionLogger.shared.flush() }
